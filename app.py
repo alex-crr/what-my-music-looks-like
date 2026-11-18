@@ -3,7 +3,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 import requests
 from flask import Flask, Response, jsonify, request
@@ -11,7 +11,7 @@ from flask import Flask, Response, jsonify, request
 LASTFM_KEY = os.environ.get("LASTFM_API_KEY", "")
 LASTFM_USER = os.environ.get("LASTFM_USER", "")
 TTL = int(os.environ.get("CACHE_SECONDS", "60"))  # how long one Last.fm answer is reused
-DEEZER_BUDGET = 8  # seconds the page waits for covers; the rest arrive on a later refresh
+DEEZER_BUDGET = 3  # seconds the page waits for covers; the rest arrive on a later refresh
 LASTFM_URL = "https://ws.audioscrobbler.com/2.0/"
 DEEZER_SEARCH = "https://api.deezer.com/search"
 NO_COVER = "2a96cbd8b46e442fc41c2b86b821562f"  # Last.fm's grey star placeholder image
@@ -22,6 +22,7 @@ lock = threading.Lock()  # many visitors at the same moment still make one call
 deezer = {}  # (artist, title) -> {"cover", "link"} or None; a match never changes, so it never expires
 pool = ThreadPoolExecutor(5)  # at most 5 Deezer searches at once (Deezer limits request rate)
 media = {}  # url -> (content type, bytes); ponytail: in memory, lost on restart
+issued = set()  # cover URLs this server put in /api/recent: the only ones /media will fetch
 
 
 class LastfmError(Exception):
@@ -60,13 +61,17 @@ def deezer_match(artist, title):
                 break
     except (requests.RequestException, ValueError):
         return None
-    deezer[key] = {"cover": hit.get("album", {}).get("cover_big"), "link": hit.get("link")} if hit else None
+    # cover_medium (250 px) is enough for the graph and loads faster than cover_big
+    deezer[key] = {"cover": hit.get("album", {}).get("cover_medium"), "link": hit.get("link")} if hit else None
     return deezer[key]
 
 
 def proxied(url):
+    if not url:
+        return None
+    issued.add(url)  # ponytail: grows with every distinct cover seen; a few KB, fine for a class project
     # relative (no leading /): works at / locally and under /music/ behind the server's Caddy
-    return f"media?url={quote(url, safe='')}" if url else None
+    return f"media?url={quote(url, safe='')}"
 
 
 def build(tracks):
@@ -127,10 +132,8 @@ def recent():
 def media_proxy():
     """Covers go through here, so the browser never loads anything from Last.fm or Deezer."""
     url = request.args.get("url", "")
-    parts = urlparse(url)
-    host = parts.hostname or ""
-    if parts.scheme != "https" or not (host == "lastfm.freetls.fastly.net" or host.endswith(".dzcdn.net")):
-        return "", 400  # not an open proxy
+    if url not in issued:  # only covers we handed out: not an open proxy, whatever host Last.fm or Deezer use
+        return "", 400
     if url not in media:
         try:
             r = requests.get(url, timeout=10)

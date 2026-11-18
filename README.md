@@ -1,16 +1,17 @@
 # What my music looks like
 
-My recent listening as a map of what I play after what. Each album is a circle showing its cover; the circle's area grows with the number of plays. An arrow goes from each album to the next one I played. A transition I repeat gets a thicker arrow, old transitions fade, and an arrow is dashed when a pause of 30 minutes or more separates the two plays (a new listening session). The album playing now has a pulsing green ring, and the very last arrow is green.
+My recent listening as a graph in the style of Obsidian's graph view: albums are circles showing their cover (area grows with plays), linked to the album I played next. Groups of albums I play together, the **kernels**, get a colour and drift into their own clump. The album playing now has a pulsing green ring, and the last line is green.
 
-Hover over a circle, or tap it on a phone, to keep only its arrows and see under the graph where I usually come from and go to after that album.
+Drag a circle, scroll or pinch to zoom, drag the background to move, **Fit** to see everything again. Hover or tap a circle to keep only its lines and see, under the graph, where I usually come from and go to; tap a kernel under the graph to see only that kernel.
 
 The data comes from Last.fm (`user.getRecentTracks`, the last 200 plays), fed by a scrobbler on my phone. The covers come from the Deezer API, which has better covers than Last.fm. Last.fm's own image is used when Deezer finds nothing.
 
 ## How the graph is built (`static/app.js`)
 
-1. **Model:** the plays are put in time order. Each album becomes a node. When two plays in a row are from different albums, the arrow between them gets +1. Plays of the same album in a row only make its circle bigger.
-2. **Layout:** a small force simulation written by hand (no library, since the page only loads files from my server). Every pair of circles pushes apart, every arrow pulls its two circles together, and a weak pull keeps everything near the centre. The forces fade over 300 steps so the layout settles. Positions are kept between refreshes: when no new album has appeared, the layout doesn't run again, so nothing jumps.
-3. **Drawing:** SVG. Arrows are curves bent to one side, so A→B and B→A don't overlap. Covers are clipped to circles. Track names are inserted as text, never as HTML.
+1. **Model.** Plays in time order. Each album is a node. Two plays in a row from different albums add a line between them. A line's **weight** grows by 1 each time it happens inside a listening session, and only by 0.2 when a pause of 30 min or more separates the two plays, because a jump after a pause says little about what goes together.
+2. **Kernels.** The weights go to **Louvain** community detection (Blondel et al., 2008, the method Gephi uses): each album moves into the neighbouring group that most raises *modularity* (weight inside groups compared with what random lines would give), then each group becomes one node and it starts again, until nothing moves. Groups of 2 albums or more are kernels.
+3. **Layout.** A small force simulation, written by hand since the page only loads files from my server: every pair of circles pushes apart, every line is a spring that pulls harder when its weight is higher, each kernel pulls its albums toward its centre, and a weak pull keeps everything near the middle. The forces fade as the layout settles. Positions are kept between refreshes, so the graph only moves when a new album appears. Early on, the layout is turned a quarter turn if needed, so it is tall on a phone and wide on a laptop.
+4. **Drawing.** SVG. Lines keep the same thickness at every zoom. Names appear when a circle is big enough on screen. Track names are inserted as text, never as HTML.
 
 ## Start
 
@@ -34,7 +35,7 @@ browser ──> this server (Flask, port 8081) ──> Last.fm  (recent tracks, 
 |---|---|
 | `/` | The page (`static/`). Plain HTML, CSS and JavaScript, no external files. |
 | `/api/recent` | Recent tracks from Last.fm, with a Deezer cover added to each track. |
-| `/media?url=…` | Fetches a cover for the browser. Only Last.fm and Deezer image hosts are accepted, so it can't be used to fetch anything else. |
+| `/media?url=…` | Fetches a cover for the browser. It only accepts cover URLs that `/api/recent` itself handed out, so it can't be used to fetch anything else, and it keeps working when Last.fm changes its image host. |
 
 ## The rules, and where each one is met
 

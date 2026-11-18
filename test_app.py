@@ -25,7 +25,7 @@ import app as server  # noqa: E402
 
 TRACK = {"artist": {"#text": "Daft Punk"}, "name": "One More Time", "album": {"#text": "Discovery"},
          "date": {"uts": "1700000000"}, "url": "https://www.last.fm/music/x",
-         "image": [{"#text": "https://lastfm.freetls.fastly.net/i/u/300x300/abc.png"}]}
+         "image": [{"#text": "https://img.some-new-lastfm-cdn.example/i/u/300x300/abc.png"}]}  # any host: Last.fm has changed it before
 net = {"lastfm": "ok", "deezer": "ok", "lastfm_calls": 0, "slow_lastfm": 0}
 logs = []
 server.print = lambda *a, **k: logs.append(" ".join(map(str, a)))  # capture the server's log lines
@@ -55,9 +55,11 @@ def fake_get(url, params=None, timeout=None):
             return Reply({"error": 6, "message": "User not found"}, 404)
         return Reply({"recenttracks": {"track": TRACK}})  # one track: an object, not a list, like the real Last.fm
     if url == server.DEEZER_SEARCH:
+        if net["deezer"] == "none":
+            return Reply({"data": []})
         if net["deezer"] == "slow":
             time.sleep(3)
-        return Reply({"data": [{"album": {"cover_big": "https://cdn-images.dzcdn.net/images/cover/x/500x500.jpg"},
+        return Reply({"data": [{"album": {"cover_medium": "https://cdn-images.dzcdn.net/images/cover/x/250x250.jpg"},
                                 "link": "https://www.deezer.com/track/1"}]})
     return Reply(raw=b"image bytes")  # image hosts
 
@@ -105,8 +107,11 @@ check("/media returns an allowed image", client.get("/" + cover).status_code == 
 page = (ROOT / "static/index.html").read_text() + (ROOT / "static/app.js").read_text()
 absolute = re.findall(r'(?:src|href)="/[^"]*"|fetch\("/', page)
 check("the page uses relative URLs, so it also works under /music/", not absolute, absolute)
-for bad in ("https://evil.example/x.png", "http://lastfm.freetls.fastly.net/x.png", "https://dzcdn.net.evil.com/x"):
+for bad in ("https://evil.example/x.png", "https://cdn-images.dzcdn.net/not-a-cover-we-gave-out.jpg"):
     check(f"/media refuses {bad}", client.get("/media", query_string={"url": bad}).status_code == 400)
+fresh(deezer="none")
+lfm = client.get("/api/recent").get_json()["tracks"][0]["cover"]
+check("a Last.fm cover (no Deezer match) is served too", client.get("/" + lfm).status_code == 200, lfm)
 
 print("Done when: my key is nowhere on GitHub")
 gitignore = (ROOT / ".gitignore").read_text().split()
@@ -172,7 +177,7 @@ fresh(deezer="slow")
 server.DEEZER_BUDGET, start = 0.5, time.time()
 code, body = get()
 waited = time.time() - start
-server.DEEZER_BUDGET = 8
+server.DEEZER_BUDGET = 3
 check("a slow Deezer does not hold the page", code == 200 and waited < 2, f"{waited:.1f} s")
 js = (ROOT / "static/app.js").read_text()
 check("the page has its own message when the server itself is down", "The server is not answering" in js)

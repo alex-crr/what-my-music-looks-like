@@ -13,12 +13,17 @@
     <p id="status" aria-live="polite">Loading…</p>
   </header>
   <main>
-    <svg id="graph" role="img" aria-label="Albums I listened to, with arrows to what I played next"></svg>
+    <div class="stage">
+      <svg id="graph" role="img" aria-label="Albums I listened to, linked to what I played next, grouped in kernels"></svg>
+      <button id="fit" type="button">Fit</button>
+    </div>
     <section id="info" aria-live="polite"></section>
+    <section id="kernels" aria-label="Kernels: albums I tend to play together"></section>
     <p class="legend">
-      Circle size: plays · Arrow: what came next · Thicker: happened more often ·
-      Faded: longer ago · Dashed: after a pause of 30 min or more · <span class="green">Green ring</span>: playing now.
-      Tap or hover a circle to follow its arrows.
+      Circle size: plays · Line: what came next (arrow = direction) · Thicker: happened more often ·
+      Faded: longer ago · Dashed: after a pause of 30 min or more · Colour: kernel, albums I play together ·
+      <span class="green">Green ring</span>: playing now.
+      Drag a circle, scroll or pinch to zoom, drag the background to move.
     </p>
   </main>
   <script src="app.js"></script>
