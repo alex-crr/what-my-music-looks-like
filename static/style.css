@@ -64,7 +64,7 @@ main { padding: 0 20px; }
 .node.focal .face { animation: drift var(--dur) ease-in-out var(--delay) infinite alternate; }
 @keyframes drift { to { transform: translate(var(--dx), var(--dy)); } }
 
-/* playing now: the album breathes and pushes its neighbours aside (breathe() in app.js) */
+/* playing now: the album beats like a heart and pushes its neighbours aside (beat() in app.js) */
 .node.now image { opacity: 1; }
 
 @media (prefers-reduced-motion: reduce) {

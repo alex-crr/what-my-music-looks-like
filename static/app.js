@@ -378,7 +378,7 @@ function build() {
   select(selected && graph.byKey.has(selected) ? selected : null);
 }
 
-// Where a circle is drawn: its place in the layout, plus the push from the album playing now (see breathe)
+// Where a circle is drawn: its place in the layout, plus the push from the album playing now (see beat)
 const px = (n) => n.x + (n.ox || 0), py = (n) => n.y + (n.oy || 0), pr = (n) => n.r * (n.k || 1);
 
 function render(only) { // only: a Set of circles to redraw, with their lines; default everything
@@ -596,16 +596,19 @@ addEventListener("resize", () => {
   resizeTimer = setTimeout(() => graph && svg.clientWidth !== W && build(), 200);
 });
 
-// The album playing now breathes: it grows and shrinks, pushing the circles around it aside and letting them back.
+// The album playing now beats like a heart: two quick swells (lub-dub), then a rest, pushing the circles around it
+// aside and letting them back.
 // The push is only drawn: the layout itself doesn't move. Reduced motion: it stays half-grown, still.
-const BREATH = 2400; // ms per breath
+const HEARTBEAT = 1000; // ms per beat: 60 a minute
+const swell = (x, at) => Math.exp(-(((x - at) / 0.06) ** 2)); // one quick bump centred on "at" (fraction of a beat)
 const still = matchMedia("(prefers-reduced-motion: reduce)");
 let lastGrow = -1;
-function breathe(t) {
+function beat(t) {
   const now = graph?.nodes.find((n) => n.now);
   if (now) {
     const peak = 12 + 0.4 * now.r;
-    const grow = still.matches ? peak / 2 : (peak * (1 - Math.cos((2 * Math.PI * t) / BREATH))) / 2;
+    const x = (t % HEARTBEAT) / HEARTBEAT;
+    const grow = still.matches ? peak / 2 : peak * (swell(x, 0.15) + 0.6 * swell(x, 0.35)); // lub, dub, rest
     now.k = (now.r + grow) / now.r;
     const moved = new Set([now]);
     for (const n of graph.nodes) {
@@ -618,9 +621,9 @@ function breathe(t) {
     if (!running && Math.abs(grow - lastGrow) > 0.05) render(moved); // while the layout runs, its own frames draw this
     lastGrow = grow;
   }
-  requestAnimationFrame(breathe);
+  requestAnimationFrame(beat);
 }
-requestAnimationFrame(breathe);
+requestAnimationFrame(beat);
 
 load();
 setInterval(load, 60_000); // the server cache keeps this at one Last.fm call per minute at most
