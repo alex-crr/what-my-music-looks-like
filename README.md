@@ -1,6 +1,6 @@
 # What my music looks like
 
-My recent listening as a graph in the style of Obsidian's graph view: albums are circles showing their cover (area grows with plays), linked to the album I played next. Groups of albums I play together, the **kernels**, get a colour and drift into their own clump. The album playing now has a pulsing green ring, and the last line is green.
+My recent listening as a graph in the style of Obsidian's graph view: albums are circles showing their cover, sized against my most played album (played once: a small dot), linked to the album I played next. Groups of albums I play together, the **kernels**, get a colour and drift into their own clump. The album playing now has a pulsing green ring, and the last line is green.
 
 Drag a circle, scroll or pinch to zoom, drag the background to move, **Fit** to see everything again. Hover or tap a circle to keep only its lines and see, under the graph, where I usually come from and go to; tap a kernel under the graph to see only that kernel.
 
@@ -11,7 +11,7 @@ The data comes from Last.fm (`user.getRecentTracks`, the last 200 plays), fed by
 1. **Model.** Plays in time order. Each album is a node. Two plays in a row from different albums add a line between them. A line's **weight** grows by 1 each time it happens inside a listening session, and only by 0.2 when a pause of 30 min or more separates the two plays, because a jump after a pause says little about what goes together.
 2. **Kernels.** The weights go to **Louvain** community detection (Blondel et al., 2008, the method Gephi uses): each album moves into the neighbouring group that most raises *modularity* (weight inside groups compared with what random lines would give), then each group becomes one node and it starts again, until nothing moves. Groups of 2 albums or more are kernels.
 3. **Layout.** A small force simulation, written by hand since the page only loads files from my server: every pair of circles pushes apart, every line is a spring that pulls harder when its weight is higher, each kernel pulls its albums toward its centre, and a weak pull keeps everything near the middle. The forces fade as the layout settles. Positions are kept between refreshes, so the graph only moves when a new album appears. Early on, the layout is turned a quarter turn if needed, so it is tall on a phone and wide on a laptop.
-4. **Drawing.** SVG. Lines keep the same thickness at every zoom. Names appear when a circle is big enough on screen. Track names are inserted as text, never as HTML.
+4. **Drawing.** SVG. Lines keep the same thickness at every zoom. Names are not drawn on the graph: they show under it when a circle is hovered or tapped, and in the kernel list. Track names are inserted as text, never as HTML.
 
 ## Start
 

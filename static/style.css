@@ -38,9 +38,6 @@ main { padding: 8px 16px 24px; }
 .node .ring { fill: none; stroke: var(--c); stroke-width: 2.5; }
 .node .initials { fill: #fff; font-size: 9px; font-weight: 600; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .node.sel .ring { stroke: #fff; stroke-width: 3.5; }
-/* labels keep the same size on screen at every zoom (--k is the zoom factor) */
-.label { fill: #ccc; font-size: calc(11px / var(--k, 1)); text-anchor: middle; pointer-events: none; display: none; paint-order: stroke; stroke: #141417; stroke-width: calc(3px / var(--k, 1)); }
-.node.big .label, .node.hl .label, .node.sel .label { display: block; }
 
 .now-ring { fill: none; stroke: var(--green); stroke-width: 3; animation: pulse 2s infinite; }
 @keyframes pulse { 50% { stroke-width: 7; opacity: 0.6; } }

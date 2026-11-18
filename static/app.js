@@ -67,7 +67,9 @@ function model(tracks) {
     prev = { key, time };
   });
   const list = [...nodes.values()];
-  list.forEach((n) => (n.r = 6 + 5 * Math.sqrt(n.plays))); // area grows with plays
+  // size weighted against my most played album: played once = small dot, most played = biggest circle
+  const most = Math.max(...list.map((n) => n.plays));
+  list.forEach((n) => (n.r = 10 + 20 * Math.sqrt((n.plays - 1) / Math.max(1, most - 1)))); // 10 to 30
   const links = [...edges.values()];
   return { nodes: list, edges: links, byKey: nodes, kernels: findKernels(list, links), steps: plays.length };
 }
@@ -272,7 +274,10 @@ function build() {
       class: `node${n.now ? " now" : ""}`, style: `--c:${n.colour}`, tabindex: 0, role: "button",
       "aria-label": `${name(n)} by ${n.latest.artist}, ${n.plays} plays`, "data-key": n.key,
     });
-    const fallback = () => g.prepend(el("circle", { r: n.r, fill: n.colour, opacity: 0.6 }), Object.assign(el("text", { class: "initials" }), { textContent: initials(n) }));
+    const fallback = () => {
+      g.prepend(el("circle", { r: n.r, fill: n.colour, opacity: 0.6 }));
+      if (n.r >= 10) g.append(Object.assign(el("text", { class: "initials" }), { textContent: initials(n) })); // no room in a small dot
+    };
     if (n.latest.cover) {
       const clip = el("clipPath", { id: `clip${i}` });
       clip.append(el("circle", { r: n.r }));
@@ -282,7 +287,6 @@ function build() {
     } else fallback();
     g.append(el("circle", { r: n.r, class: "ring" }));
     if (n.now) g.append(el("circle", { r: n.r + 5, class: "now-ring" }));
-    g.append(Object.assign(el("text", { class: "label", y: n.r + 4, "dominant-baseline": "hanging" }), { textContent: short(name(n), 24) }));
     g.addEventListener("pointerenter", (ev) => ev.pointerType === "mouse" && !drag && select(n.key));
     g.addEventListener("focus", () => select(n.key));
     n.el = g;
@@ -314,7 +318,7 @@ function render() {
 function fit() {
   const ns = graph.nodes, pad = 24;
   const minX = Math.min(...ns.map((n) => n.x - n.r)) - pad, maxX = Math.max(...ns.map((n) => n.x + n.r)) + pad;
-  const minY = Math.min(...ns.map((n) => n.y - n.r)) - pad, maxY = Math.max(...ns.map((n) => n.y + n.r)) + pad + 14;
+  const minY = Math.min(...ns.map((n) => n.y - n.r)) - pad, maxY = Math.max(...ns.map((n) => n.y + n.r)) + pad;
   const k = Math.min(W / (maxX - minX), H / (maxY - minY), 2.5);
   view = { k, x: W / 2 - ((minX + maxX) / 2) * k, y: H / 2 - ((minY + maxY) / 2) * k };
   applyView();
@@ -322,8 +326,6 @@ function fit() {
 
 function applyView() {
   layer.setAttribute("transform", `translate(${view.x},${view.y}) scale(${view.k})`);
-  svg.style.setProperty("--k", view.k); // labels keep the same size on screen
-  for (const n of graph.nodes) n.el.classList.toggle("big", n.r * view.k >= 14); // name shown once the circle is big enough
 }
 
 function zoomAt(p, factor) {
