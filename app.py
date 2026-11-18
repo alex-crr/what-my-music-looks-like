@@ -37,6 +37,7 @@ deezer_gate = threading.Lock()
 deezer_last = [0.0]  # time of the last Deezer call
 media = {}  # url -> (content type, bytes); ponytail: in memory, lost on restart
 issued = set()  # cover URLs this server put in /api/recent: the only ones /media will fetch
+by_year = {}  # year -> its plays, for the timeline
 
 
 class LastfmError(Exception):
@@ -48,7 +49,8 @@ def load_history():
     if not HISTORY_FILE.exists():
         return []
     with HISTORY_FILE.open(encoding="utf-8") as f:
-        return [{**row, "played_at": int(row["played_at"]), "now_playing": False, "lastfm_cover": ""}
+        return [{**row, "played_at": int(row["played_at"]), "year": time.gmtime(int(row["played_at"])).tm_year,
+                 "now_playing": False, "lastfm_cover": ""}
                 for row in csv.DictReader(f)]
 
 
@@ -164,7 +166,12 @@ def merge(recent):
     start_lastfm = min(times, default=now)  # the history stops where Last.fm starts: no play counted twice
     since = now - HISTORY_DAYS * 86400
     past = [dict(p) for p in history if since <= p["played_at"] < start_lastfm]
-    plays = past + sorted(recent, key=lambda p: p["played_at"] or now)
+    return label(past + sorted(recent, key=lambda p: p["played_at"] or now), cut=bool(past))  # Last.fm alone: few enough to draw everything
+
+
+def label(plays, cut):
+    """Plays oldest first get their album key and listening-session number, then, if cut, only the albums worth drawing."""
+    now = time.time()
     session, last = 0, None
     for p in plays:  # sessions on the full sequence, before any album is left out
         t = p["played_at"] or now
@@ -172,11 +179,18 @@ def merge(recent):
             session += 1
         p.update(session=session, key=album_key(p))
         last = t
-    if not past:
-        return plays  # Last.fm alone: few enough to draw everything
+    if not cut:
+        return plays
     counts = Counter(p["key"] for p in plays)
     keep = {k for k, _ in counts.most_common(TOP_ALBUMS)} | {p["key"] for p in plays[-20:]}  # always the latest
     return [p for p in plays if p["key"] in keep]
+
+
+def year_plays(year):
+    """One calendar year (UTC) of the Deezer history, cut like the recent view. Kept: the history only changes on restart."""
+    if year not in by_year:
+        by_year[year] = label([dict(p) for p in history if p["year"] == year], cut=True)
+    return by_year[year]
 
 
 def known_cover(plays):
@@ -256,6 +270,13 @@ def recent():
     if not (LASTFM_KEY and LASTFM_USER):
         return jsonify(message="The server has no Last.fm key or user. "
                                "Set LASTFM_API_KEY and LASTFM_USER in .env, then restart."), 503
+    years = sorted({p["year"] for p in history})  # ponytail: history years only; this year's newest plays are in "now"
+    if "year" in request.args:  # the timeline: one past year, from the history alone, no Last.fm call
+        year = request.args["year"]
+        if not year.isdigit() or int(year) not in years:
+            return jsonify(message="No listening history for that year."), 404
+        tracks, pending = build(year_plays(int(year)), 0)
+        return jsonify(user=LASTFM_USER, tracks=tracks, year=int(year), pending=pending)
     first = cache["plays"] is None
     if first:
         refresh()  # nothing to show yet: this visit waits for Last.fm
@@ -269,7 +290,7 @@ def recent():
     tracks, pending = build(plays, DEEZER_BUDGET if first else 0)
     return jsonify(user=LASTFM_USER, fetched_at=cache["fetched_at"], tracks=tracks,
                    history_days=HISTORY_DAYS if history else 0, message=error,
-                   refreshing=refresher.is_alive(), pending=pending)
+                   refreshing=refresher.is_alive(), pending=pending, years=years)
 
 
 @app.get("/media")

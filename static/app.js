@@ -23,21 +23,27 @@ let W = 800, H = 500, layer = null;
 let soon = null; // timer to ask the server again while data or covers are on their way
 let quick = 0; // quick re-asks in a row: capped, so a Deezer that keeps refusing can't keep the page busy
 let seen = ""; // what the last answer looked like: an identical answer doesn't redraw anything
+let year = null; // the timeline: null = now (last 30 days, live), or a year of the Deezer history
+const slider = document.getElementById("year");
 
 // ---------- data ----------
 
 async function load() {
   // relative URL: the same page works at / locally and under /music/ on the server
-  const r = await fetch("api/recent").catch(() => null);
+  const asked = year;
+  const r = await fetch(asked ? `api/recent?year=${asked}` : "api/recent").catch(() => null);
   const answer = (r && (await r.json().catch(() => null))) || { message: "The server is not answering. Try again in a minute." };
+  if (asked !== year) return; // the slider moved on while this was loading
+  if (answer.years?.length && slider.parentElement.hidden) timeline(answer.years);
 
   status.classList.toggle("warn", Boolean(answer.message));
   status.textContent = answer.message
     ? answer.message + (answer.fetched_at ? ` Showing music from ${clock(answer.fetched_at)}.` : "")
+    : answer.year ? `${answer.user} · ${answer.year}, my most played albums`
     : `${answer.user} · updated ${clock(answer.fetched_at)}` +
       (answer.history_days ? ` · last ${answer.history_days} days, my most played albums` : "");
 
-  const look = answer.tracks ? `${answer.fetched_at}|${answer.tracks.length}|${answer.tracks.filter((t) => t.cover).length}|${answer.pending}` : "";
+  const look = answer.tracks ? `${answer.year ?? answer.fetched_at}|${answer.tracks.length}|${answer.tracks.filter((t) => t.cover).length}|${answer.pending}` : "";
   if (answer.tracks?.length && look !== seen) {
     seen = look;
     data = answer;
@@ -252,15 +258,34 @@ function update() {
   const first = !graph;
   graph = model(data.tracks);
   const fresh = graph.nodes.filter((n) => !pos.has(n.key)).length;
+  const jump = first || fresh > graph.nodes.length / 2; // first layout, or another year: mostly new albums
   size();
-  place();
-  if (first) {
+  place(); // albums already on screen start where they were, so a year change shows what stayed
+  if (jump) {
     // Work out most of the layout before drawing it: the graph appears nearly in place, then settles
     alpha = 1;
     while (alpha > 0.1) tick();
   }
   build();
-  if (fresh) reheat(first ? 0.1 : 0.3); // a new album: let the layout adjust; otherwise nothing moves
+  if (fresh) reheat(jump ? 0.1 : 0.3); // a new album: let the layout adjust; otherwise nothing moves
+}
+
+// The timeline under the graph: one step per year of history, then "Now"
+function timeline(years) {
+  const labels = [...years, "Now"].map((y) => text("span", y));
+  slider.max = years.length;
+  slider.value = years.length;
+  slider.parentElement.querySelector(".ticks").replaceChildren(...labels);
+  slider.parentElement.hidden = false;
+  const show = () => labels.forEach((l, i) => l.classList.toggle("on", i === Number(slider.value)));
+  show();
+  slider.addEventListener("input", () => {
+    year = years[slider.value] ?? null;
+    show();
+    seen = "";
+    quick = 0;
+    load();
+  });
 }
 
 // Start positions: where the album was last time; a new album next to the one played before it;
@@ -577,7 +602,9 @@ function ago(s) {
   const min = Math.max(0, Math.round((Date.now() / 1000 - s) / 60));
   if (min < 60) return `${min} min ago`;
   if (min < 1440) return `${Math.round(min / 60)} h ago`;
-  return `${Math.round(min / 1440)} d ago`;
+  if (min < 86400) return `${Math.round(min / 1440)} d ago`; // up to 60 days
+  if (min < 525600) return `${Math.round(min / 43200)} months ago`;
+  return `${Math.round(min / 525600)} y ago`;
 }
 
 // Redraw when the width changes. Not on height: a phone changes height when its address bar hides.

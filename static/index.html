@@ -20,6 +20,10 @@
       <svg id="graph" role="img" aria-label="Albums I listened to, linked to what I played next, grouped in kernels"></svg>
       <button id="fit" type="button">Fit</button>
     </div>
+    <div class="timeline" hidden>
+      <input type="range" id="year" min="0" step="1" aria-label="Year to show: a year of my history, or now">
+      <div class="ticks"></div>
+    </div>
     <p class="legend">
       Circle: an album, bigger = played more · Line: two albums I played one after the other more than once, thicker = more often,
       fainter = longer ago; hover or tap an album for all its lines, with arrows · Colour: kernel, albums I play together · Wide band: how often I go from one kernel to another, wider = more often ·

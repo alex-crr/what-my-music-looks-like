@@ -23,6 +23,8 @@ Getting the data took a detour. Deezer has no API for listening history, and its
 - **Albums swaying toward each other:** the last 12 albums I played. Each leans toward the one I played next, then lets go, in a wave that runs from the oldest to the newest. Their lines always show, except across a pause of 30 min or more.
 - **Full-colour circles:** my ten most played albums; the others are slightly dimmed.
 
+The **timeline** under the graph goes back year by year through the Deezer history (2021, 2022, …) and ends at **Now**, the last 30 days with live plays. Each year is its own graph, with its own kernels: albums that were already on screen start where they were, so you can see what stayed and what came in.
+
 Hover or tap an album to see all its lines, including those that happened only once, with arrows showing which way I went. The card at the bottom then shows the album, its play count, what I usually play before and after it, and a link to Deezer. With nothing selected, the card shows what is playing now. Drag a circle to move it, scroll or pinch to zoom, drag the background to pan, and press **Fit** to see everything again.
 
 ## Motion and "reduce motion"
@@ -78,7 +80,7 @@ Then restart the app. The history is read at start.
 - **Last 30 days, 120 most played albums**, plus the albums of the latest plays, so what is playing now is always there. Change this with `HISTORY_DAYS` and `TOP_ALBUMS`.
 - **Sessions** are counted on the full sequence, before any album is left out, so a hidden album between two shown ones doesn't fake a pause.
 - **Covers** come from Deezer by ISRC, an exact match. Deezer allows about 50 calls per 5 s, so the server spaces its calls. After a restart, all covers are there within about 15 s.
-- `data/` and `*.xlsx` are in `.gitignore` and `.dockerignore`, so the history never goes to GitHub or into the image. `compose.yaml` mounts `data/` read-only. Without it, the app uses Last.fm alone.
+- `data/` and `*.xlsx` are in `.gitignore` and `.dockerignore`, so the history never goes to GitHub or into the image. `compose.yaml` mounts `data/` read-only. Without it, the app uses Last.fm alone and the timeline is hidden.
 
 ### Put it online (optional)
 
@@ -131,7 +133,8 @@ browser ──> this server (Flask, port 8081) ──> Last.fm  (recent tracks, 
 | Route | What it does |
 |---|---|
 | `/` | The page (`static/`). Plain HTML, CSS and JavaScript, no external files. |
-| `/api/recent` | Recent tracks from Last.fm (the last 200 plays), with the Deezer history underneath and a Deezer cover added to each track. Last.fm's own image is used when Deezer finds nothing. |
+| `/api/recent` | Recent tracks from Last.fm (the last 200 plays), with the Deezer history underneath and a Deezer cover added to each track. Last.fm's own image is used when Deezer finds nothing. It also lists the years the history covers. |
+| `/api/recent?year=2023` | One calendar year (UTC) of the Deezer history, cut to its 120 most played albums, for the timeline. No Last.fm call. A year that isn't in the history gets a 404. |
 | `/media?url=…` | Fetches a cover for the browser. It only accepts cover URLs that `/api/recent` itself handed out, so it can't be used to fetch anything else, and it keeps working when Last.fm changes its image host. |
 
 ### How the graph is built (`static/app.js`)

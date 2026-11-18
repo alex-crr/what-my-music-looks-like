@@ -262,7 +262,18 @@ if real.exists():
     check("your history file holds only time, title, artist, album, ISRC", header == ["played_at", "title", "artist", "album", "isrc"], header)
 check("data/ and *.xlsx are kept out of git", "data/" in gitignore and "*.xlsx" in gitignore)
 check("...and out of the Docker image", {"data", "*.xlsx"} <= set((ROOT / ".dockerignore").read_text().split()))
+year = time.gmtime(now).tm_year
+check("the timeline lists the history's years", body["years"] == sorted({time.gmtime(now - r[0]).tm_year for r in rows}), body["years"])
+calls = net["lastfm_calls"]
+r = client.get("/api/recent", query_string={"year": year})
+in_year = [t["title"] for t in r.get_json()["tracks"]]
+check("one year shows that year's history plays, without calling Last.fm",
+      r.status_code == 200 and set(in_year) <= {x[1] for x in rows if time.gmtime(now - x[0]).tm_year == year}
+      and "Song A" in in_year and net["lastfm_calls"] == calls, in_year)
+check("a year with no history is refused", client.get("/api/recent", query_string={"year": "1999"}).status_code == 404)
+check("a year that isn't a number is refused", client.get("/api/recent", query_string={"year": "x'"}).status_code == 404)
 server.history = []
+server.by_year.clear()
 TRACK["date"] = {"uts": "1700000000"}
 
 print("\nManual checks (need a browser, Docker or your GitHub):")
