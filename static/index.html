@@ -20,17 +20,15 @@
       <svg id="graph" role="img" aria-label="Albums I listened to, linked to what I played next, grouped in kernels"></svg>
       <button id="fit" type="button">Fit</button>
     </div>
+    <p class="legend">
+      Circle: an album, bigger = played more · Line: two albums I played one after the other more than once, thicker = more often,
+      fainter = longer ago; hover or tap an album for all its lines · Colour: kernel, albums I play together · White line: my latest listening ·
+      <span class="green">Green ring</span>: playing now · Drag, scroll or pinch to move and zoom.
+    </p>
   </main>
   <footer>
     <section id="card" aria-live="polite"></section>
-    <button id="about" type="button" aria-expanded="false" aria-controls="legend" aria-label="How to read the graph">i</button>
     <span>Data: Last.fm and Deezer</span>
-    <p id="legend" hidden>
-      Each circle is an album; bigger means played more. A line goes to the album played next, thicker when it
-      happened more often, fainter when it is older, dashed after a pause of 30 min or more. Colours are kernels:
-      albums I play together. The fine white line is my latest listening, ending at the album playing now (green ring).
-      Drag a circle, scroll or pinch to zoom, drag the background to move.
-    </p>
   </footer>
   <script src="app.js"></script>
 </body>

@@ -73,11 +73,11 @@ function model(tracks) {
     if (prev && prev.key !== key) {
       const pause = t.session !== prev.session; // sessions come from the server, counted before albums were left out
       const id = `${prev.key}→${key}`;
-      const e = edges.get(id) || { id, from: prev.key, to: key, count: 0, weight: 0 };
+      const e = edges.get(id) || { id, from: prev.key, to: key, count: 0, together: 0, weight: 0 };
       e.count += 1;
+      e.together += pause ? 0 : 1; // only these are drawn: a jump after a pause isn't "what I played next"
       e.weight += pause ? 0.2 : 1; // inside a session it says "these go together"; after a pause, much less
       e.step = step; // when it last happened, for fading
-      e.pause = pause;
       edges.set(id, e);
     }
     prev = { key, session: t.session };
@@ -287,7 +287,7 @@ function build() {
   size();
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   layer = el("g", {});
-  const defs = markers();
+  const defs = el("defs", {});
   svg.replaceChildren(defs, layer);
 
   // Kernel colour fields: a faint tint of the kernel's colour behind each of its albums
@@ -304,25 +304,24 @@ function build() {
   });
   layer.append(fields);
 
-  // Lines take their kernel's colour; a line between two kernels fades from one colour to the other
-  const lastStep = Math.max(0, ...graph.edges.map((e) => e.step));
+  // Lines take their kernel's colour; a line between two kernels fades from one colour to the other.
+  // Only transitions inside a session are drawn, and those that happened once only show on hover.
   graph.edges.sort((a, b) => a.step - b.step).forEach((e, i) => { // recent lines drawn last, on top
+    if (!e.together) return; // only ever after a pause: still weighs on the kernels, not drawn
     const a = graph.byKey.get(e.from), b = graph.byKey.get(e.to);
     const inner = a.colour === b.colour;
-    const latest = e.step === lastStep;
     if (!inner) {
       e.grad = el("linearGradient", { id: `line${i}`, gradientUnits: "userSpaceOnUse" });
       e.grad.append(el("stop", { offset: 0, "stop-color": a.colour }), el("stop", { offset: 1, "stop-color": b.colour }));
       defs.append(e.grad);
     }
     e.el = el("line", {
-      class: `edge${e.pause ? " pause" : ""}`,
-      stroke: latest ? "#1db954" : inner ? a.colour : `url(#line${i})`,
-      "stroke-width": 1 + Math.log2(e.count),
+      class: `edge${e.together === 1 ? " once" : ""}`,
+      stroke: inner ? a.colour : `url(#line${i})`,
+      "stroke-width": 0.75 * (1 + Math.log2(e.together)),
       "vector-effect": "non-scaling-stroke", // same thickness at every zoom
       // recent = brighter, old = fainter; lines between two kernels fainter, so the kernels stand out
       opacity: ((0.18 + 0.5 * (e.step / graph.steps)) * (inner ? 1 : 0.6)).toFixed(2),
-      "marker-end": `url(#${latest ? "head-green" : "head"})`,
     });
     layer.append(e.el);
   });
@@ -375,11 +374,12 @@ function render() {
     n.fieldEl?.setAttribute("transform", at);
   }
   for (const e of graph.edges) {
+    if (!e.el) continue;
     const a = graph.byKey.get(e.from), b = graph.byKey.get(e.to);
     const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
-    // from edge to edge of the two circles, leaving room for the arrowhead
+    // from edge to edge of the two circles
     const x1 = (a.x + (dx / d) * a.r).toFixed(1), y1 = (a.y + (dy / d) * a.r).toFixed(1);
-    const x2 = (b.x - (dx / d) * (b.r + 3)).toFixed(1), y2 = (b.y - (dy / d) * (b.r + 3)).toFixed(1);
+    const x2 = (b.x - (dx / d) * b.r).toFixed(1), y2 = (b.y - (dy / d) * b.r).toFixed(1);
     for (const target of e.grad ? [e.el, e.grad] : [e.el]) {
       target.setAttribute("x1", x1); target.setAttribute("y1", y1);
       target.setAttribute("x2", x2); target.setAttribute("y2", y2);
@@ -510,9 +510,10 @@ function spread() {
 function select(key) {
   selected = key;
   const keep = new Set(key ? [key] : []);
-  if (key) for (const e of graph.edges) if (e.from === key || e.to === key) keep.add(e.from).add(e.to);
+  const drawn = graph.edges.filter((e) => e.el);
+  if (key) for (const e of drawn) if (e.from === key || e.to === key) keep.add(e.from).add(e.to);
   svg.classList.toggle("focus", Boolean(key));
-  for (const e of graph.edges) e.el.classList.toggle("hl", e.from === key || e.to === key);
+  for (const e of drawn) e.el.classList.toggle("hl", e.from === key || e.to === key);
   for (const n of graph.nodes) {
     n.el.classList.toggle("hl", keep.has(n.key));
     n.el.classList.toggle("sel", n.key === key);
@@ -544,16 +545,6 @@ function describe(chosen) {
   const box = document.createElement("div");
   box.append(...lines);
   card.replaceChildren(pic, box);
-}
-
-function markers() {
-  const defs = el("defs", {});
-  for (const [id, fill] of [["head", "#9a9aa6"], ["head-green", "#1db954"]]) {
-    const m = el("marker", { id, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, markerUnits: "userSpaceOnUse", orient: "auto" });
-    m.append(el("path", { d: "M0,1 L9,5 L0,9 z", fill }));
-    defs.append(m);
-  }
-  return defs;
 }
 
 // ---------- small helpers ----------
@@ -590,12 +581,6 @@ let resizeTimer;
 addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => graph && svg.clientWidth !== W && build(), 200);
-});
-const about = document.getElementById("about");
-about.addEventListener("click", () => {
-  const open = about.getAttribute("aria-expanded") !== "true";
-  about.setAttribute("aria-expanded", String(open));
-  document.getElementById("legend").hidden = !open;
 });
 
 load();
