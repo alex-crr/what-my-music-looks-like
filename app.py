@@ -13,7 +13,7 @@ from flask import Flask, Response, jsonify, request
 
 LASTFM_KEY = os.environ.get("LASTFM_API_KEY", "")
 LASTFM_USER = os.environ.get("LASTFM_USER", "")
-TTL = int(os.environ.get("CACHE_SECONDS", "60"))  # how long one Last.fm answer is reused
+TTL = 60  # seconds one Last.fm answer is reused
 DEEZER_BUDGET = 3  # seconds the page waits for covers; the rest arrive on a later refresh
 LASTFM_URL = "https://ws.audioscrobbler.com/2.0/"
 DEEZER_SEARCH = "https://api.deezer.com/search"
@@ -48,7 +48,7 @@ def load_history():
     if not HISTORY_FILE.exists():
         return []
     with HISTORY_FILE.open(encoding="utf-8") as f:
-        return [{**row, "played_at": int(row["played_at"]), "now_playing": False, "lastfm_cover": "", "lastfm": None}
+        return [{**row, "played_at": int(row["played_at"]), "now_playing": False, "lastfm_cover": ""}
                 for row in csv.DictReader(f)]
 
 
@@ -147,7 +147,6 @@ def from_lastfm(t):
         "played_at": int(t["date"]["uts"]) if "date" in t else None,  # no date = playing now
         "now_playing": t.get("@attr", {}).get("nowplaying") == "true",
         "lastfm_cover": "" if NO_COVER in cover else cover,
-        "lastfm": t.get("url"),
     }
 
 
@@ -226,7 +225,6 @@ def build(plays, budget):
             "session": p["session"],
             "cover": proxied((match and match["cover"]) or lfm_cover),  # Deezer cover first, Last.fm as fallback
             "deezer": match["link"] if match else None,
-            "lastfm": p["lastfm"],
         })
     return out, sum(1 for c in covers.values() if c is MISSING)
 
@@ -270,7 +268,7 @@ def recent():
         return jsonify(message=f"{error} Try again in a minute."), 502
     tracks, pending = build(plays, DEEZER_BUDGET if first else 0)
     return jsonify(user=LASTFM_USER, fetched_at=cache["fetched_at"], tracks=tracks,
-                   history_days=HISTORY_DAYS if history else 0, stale=error is not None, message=error,
+                   history_days=HISTORY_DAYS if history else 0, message=error,
                    refreshing=refresher.is_alive(), pending=pending)
 
 

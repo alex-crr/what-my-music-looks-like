@@ -5,7 +5,7 @@ const status = document.getElementById("status");
 const SVG = "http://www.w3.org/2000/svg";
 const COLOURS = ["#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#60a5fa", "#f87171", "#2dd4bf", "#fb923c"];
 const LONE = "#8a8a93"; // albums in no kernel
-const FOCAL = 10; // the most played albums: full colour, and they breathe
+const FOCAL = 10; // the most played albums: full colour
 const REPEL = 120; // how hard circles push each other away
 const PULL = 150; // strength of the pull to the middle
 const FILL = 0.15; // share of the frame the circles should cover
@@ -89,7 +89,10 @@ function model(tracks) {
   const links = [...edges.values()];
   // the most played albums are the focal points
   [...list].sort((a, b) => b.plays - a.plays || b.time - a.time).forEach((n, i) => (n.focal = i < FOCAL));
-  return { nodes: list, edges: links, byKey: nodes, kernels: findKernels(list, links), steps: plays.length };
+  // the flow: the last 12 albums I played, in order
+  const flow = [];
+  for (const t of plays) if (flow.at(-1) !== t.key) flow.push(t.key);
+  return { nodes: list, edges: links, byKey: nodes, kernels: findKernels(list, links), steps: plays.length, flow: flow.slice(-12) };
 }
 
 // ---------- kernels ----------
@@ -321,6 +324,7 @@ function build() {
 
   // Lines take their kernel's colour; a line between two kernels fades from one colour to the other.
   // Only transitions inside a session are drawn, and those that happened once only show on hover.
+  const flowing = new Set(graph.flow.slice(1).map((k, i) => `${graph.flow[i]}→${k}`)); // the flow's lines
   graph.edges.sort((a, b) => a.step - b.step).forEach((e, i) => { // recent lines drawn last, on top
     if (!e.together) return; // only ever after a pause: still weighs on the kernels, not drawn
     const a = graph.byKey.get(e.from), b = graph.byKey.get(e.to);
@@ -331,7 +335,7 @@ function build() {
       defs.append(e.grad);
     }
     e.el = el("line", {
-      class: `edge${e.together === 1 ? " once" : ""}`,
+      class: `edge${e.together === 1 ? " once" : ""}${flowing.has(e.id) ? " flow" : ""}`,
       stroke: inner ? a.colour : `url(#line${i})`,
       "stroke-width": 0.75 * (1 + Math.log2(e.together)),
       "vector-effect": "non-scaling-stroke", // same thickness at every zoom
@@ -345,11 +349,9 @@ function build() {
   graph.nodes.forEach((n, i) => {
     const g = el("g", {
       class: `node${n.now ? " now" : ""}${n.focal ? " focal" : ""}`,
-      style: `--c:${n.colour};--dur:${(5 + (i % 5)).toFixed(1)}s;--delay:-${(i * 0.7) % 5}s;` +
-        `--dx:${(Math.cos(i * 2.4) * 3).toFixed(1)}px;--dy:${(Math.sin(i * 2.4) * 3).toFixed(1)}px`,
+      style: `--c:${n.colour}`,
       tabindex: 0, role: "button", "aria-label": `${name(n)} by ${n.latest.artist}, ${n.plays} plays`, "data-key": n.key,
     });
-    const face = el("g", { class: "face" }); // drifts (focal albums)
     const lens = el("g", { class: "lens" }); // grows on hover
     const fallback = () => {
       lens.prepend(el("circle", { r: n.r, fill: n.colour, opacity: 0.5 }));
@@ -363,8 +365,7 @@ function build() {
       lens.append(clip, img);
     } else fallback();
     lens.append(el("circle", { r: n.r, class: "ring", "vector-effect": "non-scaling-stroke" })); // 1 px at every zoom
-    face.append(lens);
-    g.append(face);
+    g.append(lens);
     g.addEventListener("pointerenter", (ev) => ev.pointerType === "mouse" && !drag && !pinned && select(n.key));
     g.addEventListener("pointerleave", (ev) => ev.pointerType === "mouse" && !drag && !pinned && select(null));
     g.addEventListener("focus", () => select(n.key));
@@ -378,7 +379,7 @@ function build() {
   select(selected && graph.byKey.has(selected) ? selected : null);
 }
 
-// Where a circle is drawn: its place in the layout, plus the push from the album playing now (see beat)
+// Where a circle is drawn: its place in the layout, plus the offsets of the motion (see animate)
 const px = (n) => n.x + (n.ox || 0), py = (n) => n.y + (n.oy || 0), pr = (n) => n.r * (n.k || 1);
 
 function render(only) { // only: a Set of circles to redraw, with their lines; default everything
@@ -388,10 +389,7 @@ function render(only) { // only: a Set of circles to redraw, with their lines; d
     n.el.setAttribute("transform", n.k ? `${at} scale(${n.k.toFixed(3)})` : at);
     n.fieldEl?.setAttribute("transform", at);
   }
-  const centre = (k) => {
-    const m = graph.kernels[k];
-    return [m.reduce((s, n) => s + n.x, 0) / m.length, m.reduce((s, n) => s + n.y, 0) / m.length];
-  };
+  const centre = (k) => [mean(graph.kernels[k], "x"), mean(graph.kernels[k], "y")];
   for (const p of only ? [] : graph.bands) { // bands follow the layout, not the push
     const [x1, y1] = centre(p.a), [x2, y2] = centre(p.b);
     for (const target of [p.el, p.grad]) {
@@ -596,34 +594,52 @@ addEventListener("resize", () => {
   resizeTimer = setTimeout(() => graph && svg.clientWidth !== W && build(), 200);
 });
 
-// The album playing now beats like a heart: two quick swells (lub-dub), then a rest, pushing the circles around it
-// aside and letting them back.
-// The push is only drawn: the layout itself doesn't move. Reduced motion: it stays half-grown, still.
+// ---------- motion ----------
+// Both motions are only drawn: the layout itself never moves, so nothing drifts over time.
+// 1. The album playing now beats like a heart (lub, dub, rest) and pushes the circles around it aside.
+// 2. My latest listening flows: each of the last 12 albums leans toward the one I played next, then lets go,
+//    in a wave running from the oldest to the newest.
+// Reduced motion: the beat stays half-grown and the flow stays still.
 const HEARTBEAT = 2500; // ms per beat: 24 a minute, slow and calm
+const FLOW = 4000; // ms per wave of the flow
 const swell = (x, at) => Math.exp(-(((x - at) / 0.06) ** 2)); // one quick bump centred on "at" (fraction of a beat)
 const still = matchMedia("(prefers-reduced-motion: reduce)");
-let lastGrow = -1;
-function beat(t) {
-  const now = graph?.nodes.find((n) => n.now);
-  if (now) {
-    const peak = 12 + 0.4 * now.r;
-    const x = (t % HEARTBEAT) / HEARTBEAT;
-    const grow = still.matches ? peak / 2 : peak * (swell(x, 0.15) + 0.6 * swell(x, 0.35)); // lub, dub, rest
-    now.k = (now.r + grow) / now.r;
-    const moved = new Set([now]);
-    for (const n of graph.nodes) {
-      if (n === now) continue;
-      const dx = n.x - now.x, dy = n.y - now.y, d = Math.hypot(dx, dy) || 1;
-      const push = grow * Math.exp(-Math.max(0, d - now.r - n.r) / 40); // nearest pushed most, fading with distance
-      n.ox = (dx / d) * push; n.oy = (dy / d) * push;
-      if (push > 0.2) moved.add(n); // ponytail: a far circle keeps under 0.2 of offset, invisible
+let moved = new Set();
+function animate(t) {
+  if (graph) {
+    const before = moved;
+    moved = new Set();
+    for (const n of graph.nodes) n.ox = n.oy = 0;
+    const now = graph.nodes.find((n) => n.now);
+    if (now) {
+      const peak = 12 + 0.4 * now.r;
+      const x = (t % HEARTBEAT) / HEARTBEAT;
+      const grow = still.matches ? peak / 2 : peak * (swell(x, 0.15) + 0.6 * swell(x, 0.35));
+      now.k = (now.r + grow) / now.r;
+      moved.add(now);
+      for (const n of graph.nodes) {
+        const dx = n.x - now.x, dy = n.y - now.y, d = Math.hypot(dx, dy) || 1;
+        const push = grow * Math.exp(-Math.max(0, d - now.r - n.r) / 40); // nearest pushed most, fading with distance
+        if (n === now || push < 0.2) continue; // ponytail: under 0.2 is invisible
+        n.ox += (dx / d) * push; n.oy += (dy / d) * push;
+        moved.add(n);
+      }
     }
-    if (!running && Math.abs(grow - lastGrow) > 0.05) render(moved); // while the layout runs, its own frames draw this
-    lastGrow = grow;
+    if (!still.matches) graph.flow.forEach((key, i) => {
+      if (!i) return;
+      const a = graph.byKey.get(graph.flow[i - 1]), b = graph.byKey.get(key);
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
+      // each leans up to 30% of the gap (16 at most), so the two never touch
+      const lean = Math.min(16, Math.max(0, d - a.r - b.r) * 0.3) * (1 - Math.cos(2 * Math.PI * (t / FLOW - i * 0.12))) / 2;
+      a.ox += (dx / d) * lean; a.oy += (dy / d) * lean;
+      b.ox -= (dx / d) * lean; b.oy -= (dy / d) * lean;
+      moved.add(a).add(b);
+    });
+    if (!running) render(new Set([...before, ...moved])); // also redraws what stopped moving; a running layout draws everything itself
   }
-  requestAnimationFrame(beat);
+  requestAnimationFrame(animate);
 }
-requestAnimationFrame(beat);
+requestAnimationFrame(animate);
 
 load();
 setInterval(load, 60_000); // the server cache keeps this at one Last.fm call per minute at most

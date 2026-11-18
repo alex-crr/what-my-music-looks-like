@@ -1,6 +1,6 @@
 # What my music looks like
 
-A live map of what I listen to. Each album I played recently is a circle showing its cover. Albums I tend to play one after the other are linked and gather into coloured groups, and the album playing right now beats like a heart in the middle of it all.
+A live map of what I listen to. Each album I played recently is a circle showing its cover. Albums I tend to play one after the other are linked and gather into coloured groups, the album playing right now beats like a heart, and my last 12 albums sway toward each other in the order I played them.
 
 Live: https://student04.wt.thomasjuldo.com/music/
 
@@ -19,13 +19,14 @@ Getting the data took a detour. Deezer has no API for listening history, and its
 - **Line:** two albums I played one after the other, in the same session, more than once. Thicker means more often, fainter means longer ago.
 - **Wide band:** two kernels I often switch between, wider the more often.
 - **Beating circle:** the album playing now. It swells twice, rests, and pushes its neighbours aside.
-- **Full-colour circles that drift slightly:** my ten most played albums.
+- **Albums swaying toward each other:** the last 12 albums I played. Each leans toward the one I played next, then lets go, in a wave that runs from the oldest to the newest. Their lines always show, except across a pause of 30 min or more.
+- **Full-colour circles:** my ten most played albums; the others are slightly dimmed.
 
 Hover or tap an album to see all its lines, including those that happened only once. The card at the bottom then shows the album, its play count, what I usually play before and after it, and a link to Deezer. With nothing selected, the card shows what is playing now. Drag a circle to move it, scroll or pinch to zoom, drag the background to pan, and press **Fit** to see everything again.
 
 ## Motion and "reduce motion"
 
-The page respects your system's **reduce motion** setting. When it is on, nothing moves: the album playing now stays still at half its beat size, the top albums don't drift and the card doesn't pulse. Everything else works the same.
+The page respects your system's **reduce motion** setting. When it is on, nothing moves: the album playing now stays still at half its beat size, the last albums don't sway and the card doesn't pulse. Everything else works the same.
 
 If you see no movement at all, that setting is probably on:
 
@@ -141,7 +142,7 @@ browser ──> this server (Flask, port 8081) ──> Last.fm  (recent tracks, 
    - **Areas and bands:** each kernel's area is a faint radial gradient behind its albums. Pairs of kernels with 3 or more transitions between them inside a session get a band from centre to centre, its width growing with the log of that count.
    - **Sizes:** circles are sized linearly, not by area, because most albums have only a few plays and an area scale squeezes them all to nearly the same size.
    - **Lines:** to keep the graph light, only transitions inside a session are drawn, and those that happened once only show while their album is hovered. Lines have no arrowheads: the card gives the direction. A line takes its kernel's colour, and a line between two kernels fades from one colour to the other. Lines and the 1 px rings keep the same thickness at every zoom.
-   - **The beat:** the album playing now swells on a heartbeat curve, two quick bumps every 2.5 s. Its neighbours are pushed away, more the closer they are. The push is only drawn, so the layout itself never drifts, and only the circles that actually move are redrawn.
+   - **Motion:** the album playing now swells on a heartbeat curve, two quick bumps every 2.5 s, and pushes its neighbours away, more the closer they are. The last 12 albums played lean toward the next one, up to 30% of the gap between them, in a wave every 4 s that runs along them. Both are only drawn, so the layout itself never drifts, and only the circles that actually move are redrawn.
    - **Text:** names are not drawn on the graph; they show in the card. Track names are inserted as text, never as HTML.
 
 ### The assignment's rules, and where each one is met

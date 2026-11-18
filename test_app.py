@@ -199,8 +199,8 @@ net["lastfm"] = "down"
 get()  # starts the background refresh, which fails
 settle()
 code, body = get()
-check("unreachable after a success: last data kept, marked stale",
-      code == 200 and body["stale"] and body["tracks"] and body["message"], body)
+check("unreachable after a success: last data kept, with a warning",
+      code == 200 and body["tracks"] and body["message"], body)
 fresh(deezer="slow")
 net["deezer_delay"] = 1
 server.DEEZER_BUDGET, start = 0.3, time.time()

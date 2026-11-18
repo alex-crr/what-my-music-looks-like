@@ -42,7 +42,7 @@ main { padding: 0 20px; }
 .field { pointer-events: none; }
 .edge { fill: none; }
 .edge.once { display: none; } /* played once: only with its album hovered or tapped */
-#graph.focus .edge.once.hl { display: inline; }
+#graph.focus .edge.once.hl, .edge.flow { display: inline; } /* the flow's lines always show */
 
 /* while something is selected, only what belongs to it stays visible */
 #graph.focus .edge:not(.hl) { opacity: 0.04 !important; }
@@ -60,15 +60,11 @@ main { padding: 0 20px; }
 .node.sel .ring, .node:focus-visible .ring { stroke: #fff; stroke-width: 1.5; }
 .node .initials { fill: #fff; font-size: 9px; font-weight: 600; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 
-/* the most played albums breathe a little */
-.node.focal .face { animation: drift var(--dur) ease-in-out var(--delay) infinite alternate; }
-@keyframes drift { to { transform: translate(var(--dx), var(--dy)); } }
-
-/* playing now: the album beats like a heart and pushes its neighbours aside (beat() in app.js) */
+/* playing now: the album beats like a heart and pushes its neighbours aside (animate() in app.js) */
 .node.now image { opacity: 1; }
 
 @media (prefers-reduced-motion: reduce) {
-  .node.focal .face, #card.live img, #card.live .swatch { animation: none; }
+  #card.live img, #card.live .swatch { animation: none; }
 }
 
 /* footer card: the album hovered or tapped, otherwise what is playing now */
