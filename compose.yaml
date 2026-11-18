@@ -9,3 +9,5 @@ services:
       # Read from .env next to this file. Empty if .env is missing: the app still starts and says so.
       LASTFM_API_KEY: ${LASTFM_API_KEY:-}
       LASTFM_USER: ${LASTFM_USER:-}
+      HISTORY_DAYS: ${HISTORY_DAYS:-30} # only used with a Deezer history
+      TOP_ALBUMS: ${TOP_ALBUMS:-120}
