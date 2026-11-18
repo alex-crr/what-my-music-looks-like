@@ -9,23 +9,29 @@
 </head>
 <body>
   <header>
-    <h1>What my music looks like</h1>
-    <p id="status" aria-live="polite">Loading…</p>
+    <div class="title">
+      <h1>What my music looks like</h1>
+      <p id="status" aria-live="polite">Loading…</p>
+    </div>
+    <dl id="stats"></dl>
   </header>
   <main>
     <div class="stage">
       <svg id="graph" role="img" aria-label="Albums I listened to, linked to what I played next, grouped in kernels"></svg>
       <button id="fit" type="button">Fit</button>
     </div>
-    <section id="info" aria-live="polite"></section>
-    <section id="kernels" aria-label="Kernels: albums I tend to play together"></section>
-    <p class="legend">
-      Circle size: plays, from a dot (played once) to my most played album · Line: what came next (arrow = direction) · Thicker: happened more often ·
-      Faded: longer ago · Dashed: after a pause of 30 min or more · Colour: kernel, albums I play together ·
-      <span class="green">Green ring</span>: playing now.
+  </main>
+  <footer>
+    <section id="card" aria-live="polite"></section>
+    <button id="about" type="button" aria-expanded="false" aria-controls="legend" aria-label="How to read the graph">i</button>
+    <span>Data: Last.fm and Deezer</span>
+    <p id="legend" hidden>
+      Each circle is an album; bigger means played more. A line goes to the album played next, thicker when it
+      happened more often, fainter when it is older, dashed after a pause of 30 min or more. Colours are kernels:
+      albums I play together. The bright line is my latest listening, ending at the album playing now (green ring).
       Drag a circle, scroll or pinch to zoom, drag the background to move.
     </p>
-  </main>
+  </footer>
   <script src="app.js"></script>
 </body>
 </html>

@@ -1,10 +1,12 @@
 const svg = document.getElementById("graph");
-const info = document.getElementById("info");
-const kernelList = document.getElementById("kernels");
+const card = document.getElementById("card");
+const stats = document.getElementById("stats");
 const status = document.getElementById("status");
 const SVG = "http://www.w3.org/2000/svg";
 const COLOURS = ["#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#60a5fa", "#f87171", "#2dd4bf", "#fb923c"];
 const LONE = "#8a8a93"; // albums in no kernel
+const FOCAL = 10; // the most played albums: full colour, a glow, and they breathe
+const TRAIL = 12; // albums in the bright line of latest listening
 const REPEL = 120; // how hard circles push each other away
 const PULL = 150; // strength of the pull to the middle
 const FILL = 0.15; // share of the frame the circles should cover
@@ -12,12 +14,15 @@ const FILL = 0.15; // share of the frame the circles should cover
 const pos = new Map(); // album -> {x, y}, kept between refreshes so nothing jumps
 let data = null; // last answer from the server
 let graph = null; // { nodes, edges, byKey, kernels, steps }
-let selected = null; // an album key, or "kernel:<n>"
+let selected = null; // the album shown in the card
+let pinned = false; // tapped or clicked: the card stays until the background is tapped
 let view = { x: 0, y: 0, k: 1 }; // pan and zoom
 let autoFit = true; // keep the whole graph in view until the visitor pans or zooms
 let alpha = 0, alphaTarget = 0, running = false; // the simulation's "heat": forces fade as it cools
 let W = 800, H = 500, layer = null;
 let soon = null; // timer to ask the server again while data or covers are on their way
+let quick = 0; // quick re-asks in a row: capped, so a Deezer that keeps refusing can't keep the page busy
+let seen = ""; // what the last answer looked like: an identical answer doesn't redraw anything
 
 // ---------- data ----------
 
@@ -30,18 +35,23 @@ async function load() {
   status.textContent = answer.message
     ? answer.message + (answer.fetched_at ? ` Showing music from ${clock(answer.fetched_at)}.` : "")
     : `${answer.user} · updated ${clock(answer.fetched_at)}` +
-      (answer.history_days ? ` · last ${answer.history_days} days with my Deezer history, most played albums` : "");
+      (answer.history_days ? ` · last ${answer.history_days} days, my most played albums` : "");
 
-  if (answer.tracks?.length) {
+  const look = answer.tracks ? `${answer.fetched_at}|${answer.tracks.length}|${answer.tracks.filter((t) => t.cover).length}|${answer.pending}` : "";
+  if (answer.tracks?.length && look !== seen) {
+    seen = look;
     data = answer;
     update();
   } else if (!data) {
     svg.replaceChildren();
-    info.replaceChildren(text("p", answer.message ? "Nothing to show yet." : "No music yet. Play something!", "empty"));
+    stats.replaceChildren(text("p", answer.message ? "Nothing to show yet." : "No music yet. Play something!", "empty"));
   }
   // The server answered with what it had: fresher data or more covers are coming, so ask again shortly
   clearTimeout(soon);
-  if (answer.refreshing || answer.pending) soon = setTimeout(load, 4000);
+  if ((answer.refreshing || answer.pending) && quick < 8) {
+    quick += 1;
+    soon = setTimeout(load, 4000);
+  } else quick = 0;
 }
 
 // From the list of plays (newest first) to albums (nodes) and "what came next" (edges).
@@ -77,7 +87,12 @@ function model(tracks) {
   const most = Math.max(...list.map((n) => n.plays));
   list.forEach((n) => (n.r = 10 + 20 * Math.sqrt((n.plays - 1) / Math.max(1, most - 1)))); // 10 to 30
   const links = [...edges.values()];
-  return { nodes: list, edges: links, byKey: nodes, kernels: findKernels(list, links), steps: plays.length };
+  // the most played albums are the focal points
+  [...list].sort((a, b) => b.plays - a.plays || b.time - a.time).forEach((n, i) => (n.focal = i < FOCAL));
+  // the trail: the latest albums in the order I played them, ending at the one playing now
+  const trail = [];
+  for (const t of plays) if (trail.at(-1) !== t.key) trail.push(t.key);
+  return { nodes: list, edges: links, byKey: nodes, kernels: findKernels(list, links), steps: plays.length, trail: trail.slice(-TRAIL) };
 }
 
 // ---------- kernels ----------
@@ -272,44 +287,77 @@ function build() {
   size();
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   layer = el("g", {});
-  svg.replaceChildren(markers(), layer);
+  const defs = markers();
+  svg.replaceChildren(defs, layer);
 
+  // Kernel colour fields: a soft glow of the kernel's colour behind each of its albums
+  const fields = el("g", { class: "field" });
+  graph.kernels.forEach((members, i) => {
+    const glow = el("radialGradient", { id: `field${i}` });
+    glow.append(el("stop", { offset: 0, "stop-color": members[0].colour, "stop-opacity": 0.2 }),
+      el("stop", { offset: 1, "stop-color": members[0].colour, "stop-opacity": 0 }));
+    defs.append(glow);
+    for (const n of members) {
+      n.fieldEl = el("circle", { r: n.r * 2.4 + 34, fill: `url(#field${i})` });
+      fields.append(n.fieldEl);
+    }
+  });
+  layer.append(fields);
+
+  // Lines take their kernel's colour; a line between two kernels fades from one colour to the other
   const lastStep = Math.max(0, ...graph.edges.map((e) => e.step));
-  for (const e of graph.edges.sort((a, b) => a.step - b.step)) { // recent lines drawn last, on top
+  graph.edges.sort((a, b) => a.step - b.step).forEach((e, i) => { // recent lines drawn last, on top
     const a = graph.byKey.get(e.from), b = graph.byKey.get(e.to);
-    const inner = a.kernel >= 0 && a.kernel === b.kernel;
+    const inner = a.colour === b.colour;
     const latest = e.step === lastStep;
+    if (!inner) {
+      e.grad = el("linearGradient", { id: `line${i}`, gradientUnits: "userSpaceOnUse" });
+      e.grad.append(el("stop", { offset: 0, "stop-color": a.colour }), el("stop", { offset: 1, "stop-color": b.colour }));
+      defs.append(e.grad);
+    }
     e.el = el("line", {
-      class: `edge${e.pause ? " pause" : ""}${inner ? " inner" : ""}${latest ? " latest" : ""}`,
-      style: `--c:${a.colour}`,
+      class: `edge${e.pause ? " pause" : ""}`,
+      stroke: latest ? "#1db954" : inner ? a.colour : `url(#line${i})`,
       "stroke-width": 1 + Math.log2(e.count),
       "vector-effect": "non-scaling-stroke", // same thickness at every zoom
-      // recent = solid, old = faded; lines between two kernels fainter, so the kernels stand out
-      opacity: ((0.3 + 0.7 * (e.step / graph.steps)) * (inner ? 1 : 0.45)).toFixed(2),
+      // recent = brighter, old = fainter; lines between two kernels fainter, so the kernels stand out
+      opacity: ((0.18 + 0.5 * (e.step / graph.steps)) * (inner ? 1 : 0.6)).toFixed(2),
       "marker-end": `url(#${latest ? "head-green" : "head"})`,
     });
     layer.append(e.el);
-  }
+  });
+
+  // The trail: my latest listening as one bright flowing line
+  graph.trailGlow = el("path", { class: "trail-glow", "vector-effect": "non-scaling-stroke" });
+  graph.trailEl = el("path", { class: "trail", "vector-effect": "non-scaling-stroke" });
+  layer.append(graph.trailGlow, graph.trailEl);
 
   graph.nodes.forEach((n, i) => {
     const g = el("g", {
-      class: `node${n.now ? " now" : ""}`, style: `--c:${n.colour}`, tabindex: 0, role: "button",
-      "aria-label": `${name(n)} by ${n.latest.artist}, ${n.plays} plays`, "data-key": n.key,
+      class: `node${n.now ? " now" : ""}${n.focal ? " focal" : ""}`,
+      style: `--c:${n.colour};--dur:${(5 + (i % 5)).toFixed(1)}s;--delay:-${(i * 0.7) % 5}s;` +
+        `--dx:${(Math.cos(i * 2.4) * 3).toFixed(1)}px;--dy:${(Math.sin(i * 2.4) * 3).toFixed(1)}px`,
+      tabindex: 0, role: "button", "aria-label": `${name(n)} by ${n.latest.artist}, ${n.plays} plays`, "data-key": n.key,
     });
+    const face = el("g", { class: "face" }); // drifts (focal albums)
+    const lens = el("g", { class: "lens" }); // grows on hover
     const fallback = () => {
-      g.prepend(el("circle", { r: n.r, fill: n.colour, opacity: 0.6 }));
-      if (n.r >= 10) g.append(Object.assign(el("text", { class: "initials" }), { textContent: initials(n) })); // no room in a small dot
+      lens.prepend(el("circle", { r: n.r, fill: n.colour, opacity: 0.5 }));
+      if (n.r >= 10) lens.append(Object.assign(el("text", { class: "initials" }), { textContent: initials(n) })); // no room in a small dot
     };
     if (n.latest.cover) {
       const clip = el("clipPath", { id: `clip${i}` });
       clip.append(el("circle", { r: n.r }));
       const img = el("image", { href: n.latest.cover, x: -n.r, y: -n.r, width: 2 * n.r, height: 2 * n.r, "clip-path": `url(#clip${i})`, preserveAspectRatio: "xMidYMid slice" });
       img.addEventListener("error", () => { img.remove(); fallback(); });
-      g.append(clip, img);
+      lens.append(clip, img);
     } else fallback();
-    g.append(el("circle", { r: n.r, class: "ring" }));
-    if (n.now) g.append(el("circle", { r: n.r + 5, class: "now-ring" }));
-    g.addEventListener("pointerenter", (ev) => ev.pointerType === "mouse" && !drag && select(n.key));
+    lens.append(el("circle", { r: n.r, class: "ring" }));
+    if (n.now) lens.append(el("circle", { r: n.r + 5, class: "now-ring" }));
+    face.append(lens);
+    g.append(face);
+    g.addEventListener("pointerenter", (ev) => ev.pointerType === "mouse" && !drag && !pinned && select(n.key));
+    g.addEventListener("pointerleave", (ev) => ev.pointerType === "mouse" && !drag && !pinned && select(null));
     g.addEventListener("focus", () => select(n.key));
     n.el = g;
     layer.append(g);
@@ -317,22 +365,53 @@ function build() {
 
   render();
   if (autoFit) fit(); else applyView();
-  renderKernels();
-  const ok = selected && (graph.byKey.has(selected) || graph.kernels[+selected.split(":")[1]]);
-  select(ok ? selected : null);
+  renderStats();
+  select(selected && graph.byKey.has(selected) ? selected : null);
 }
 
 function render() {
-  for (const n of graph.nodes) n.el.setAttribute("transform", `translate(${n.x.toFixed(1)},${n.y.toFixed(1)})`);
+  for (const n of graph.nodes) {
+    const at = `translate(${n.x.toFixed(1)},${n.y.toFixed(1)})`;
+    n.el.setAttribute("transform", at);
+    n.fieldEl?.setAttribute("transform", at);
+  }
   for (const e of graph.edges) {
     const a = graph.byKey.get(e.from), b = graph.byKey.get(e.to);
     const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
     // from edge to edge of the two circles, leaving room for the arrowhead
-    e.el.setAttribute("x1", (a.x + (dx / d) * a.r).toFixed(1));
-    e.el.setAttribute("y1", (a.y + (dy / d) * a.r).toFixed(1));
-    e.el.setAttribute("x2", (b.x - (dx / d) * (b.r + 3)).toFixed(1));
-    e.el.setAttribute("y2", (b.y - (dy / d) * (b.r + 3)).toFixed(1));
+    const x1 = (a.x + (dx / d) * a.r).toFixed(1), y1 = (a.y + (dy / d) * a.r).toFixed(1);
+    const x2 = (b.x - (dx / d) * (b.r + 3)).toFixed(1), y2 = (b.y - (dy / d) * (b.r + 3)).toFixed(1);
+    for (const target of e.grad ? [e.el, e.grad] : [e.el]) {
+      target.setAttribute("x1", x1); target.setAttribute("y1", y1);
+      target.setAttribute("x2", x2); target.setAttribute("y2", y2);
+    }
   }
+  const d = smooth(graph.trail.map((k) => graph.byKey.get(k)));
+  graph.trailEl.setAttribute("d", d);
+  graph.trailGlow.setAttribute("d", d);
+}
+
+// A smooth curve through the given circles' centres (Catmull-Rom turned into Bézier curves)
+function smooth(ps) {
+  if (ps.length < 2) return "";
+  let d = `M${ps[0].x.toFixed(1)},${ps[0].y.toFixed(1)}`;
+  for (let i = 0; i < ps.length - 1; i++) {
+    const p0 = ps[i - 1] || ps[i], p1 = ps[i], p2 = ps[i + 1], p3 = ps[i + 2] || p2;
+    const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+  }
+  return d;
+}
+
+// The numbers in the header
+function renderStats() {
+  const stat = (label, value) => {
+    const box = document.createElement("div");
+    box.append(text("dt", label), text("dd", value));
+    return box;
+  };
+  stats.replaceChildren(stat("Plays", graph.steps), stat("Albums", graph.nodes.length), stat("Kernels", graph.kernels.length));
 }
 
 // ---------- zoom, pan, drag ----------
@@ -411,7 +490,10 @@ function release(ev) {
   if (!drag) return;
   if (drag.pinch) { if (!pointers.size) drag = null; return; }
   if (drag.node) { drag.node.fixed = false; alphaTarget = 0; }
-  if (drag.moved < 5) select(drag.node ? drag.node.key : null); // a tap, not a drag
+  if (drag.moved < 5) { // a tap, not a drag: the card stays for a tapped circle, goes for the background
+    pinned = Boolean(drag.node);
+    select(drag.node ? drag.node.key : null);
+  }
   svg.classList.remove("panning");
   drag = null;
 }
@@ -427,66 +509,49 @@ function spread() {
 
 // ---------- selection and text ----------
 
-// Highlight one album and its lines, or a whole kernel, and describe it under the graph.
+// Highlight one album and its lines, and show it in the card over the graph.
 function select(key) {
   selected = key;
-  const kernel = key?.startsWith("kernel:") ? graph.kernels[+key.split(":")[1]] : null;
-  const keep = new Set(kernel ? kernel.map((n) => n.key) : key ? [key] : []);
-  if (key && !kernel) for (const e of graph.edges) if (e.from === key || e.to === key) keep.add(e.from).add(e.to);
+  const keep = new Set(key ? [key] : []);
+  if (key) for (const e of graph.edges) if (e.from === key || e.to === key) keep.add(e.from).add(e.to);
   svg.classList.toggle("focus", Boolean(key));
-  for (const e of graph.edges) {
-    e.el.classList.toggle("hl", kernel ? keep.has(e.from) && keep.has(e.to) : e.from === key || e.to === key);
-  }
+  for (const e of graph.edges) e.el.classList.toggle("hl", e.from === key || e.to === key);
   for (const n of graph.nodes) {
     n.el.classList.toggle("hl", keep.has(n.key));
     n.el.classList.toggle("sel", n.key === key);
   }
-  for (const b of kernelList.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.key === key));
-  describe(kernel ? null : graph.byKey.get(key));
+  describe(graph.byKey.get(key));
 }
 
+// The card in the footer: the album hovered or tapped, otherwise what is playing now (or was played last).
 function describe(chosen) {
-  // nothing chosen: what is playing now, or the last album played
   const n = chosen || graph.nodes.reduce((a, b) => (b.time > a.time ? b : a));
   const t = n.latest;
+  const live = !chosen; // showing the latest listening, not an album the visitor picked
+  card.classList.toggle("live", live && n.now);
   const names = (list) => list.sort((a, b) => b.count - a.count).slice(0, 3)
-    .map((e) => short(name(graph.byKey.get(e.from === n.key ? e.to : e.from)), 30)).join(", ");
+    .map((e) => short(name(graph.byKey.get(e.from === n.key ? e.to : e.from)), 28)).join(", ");
   const before = names(graph.edges.filter((e) => e.to === n.key));
   const after = names(graph.edges.filter((e) => e.from === n.key));
-
+  card.style.setProperty("--c", n.colour);
   const pic = t.cover ? Object.assign(document.createElement("img"), { src: t.cover, alt: "" }) : text("div", "", "swatch");
   if (!t.cover) pic.style.background = n.colour;
   // textContent, never innerHTML: track names come from outside and could contain HTML
-  const lines = [
-    text("p", `${name(n)} — ${t.artist}`),
-    text("p", `${n.plays} play${n.plays > 1 ? "s" : ""} · ${n.now ? "playing now" : `last: ${t.title}, ${ago(n.time)}`}`, "muted"),
-    text("p", n.kernel >= 0 ? `Kernel of ${graph.kernels[n.kernel].length} albums` : "In no kernel yet", "muted"),
-  ];
-  if (before) lines.push(text("p", `Came from: ${before}`, "muted"));
-  if (after) lines.push(text("p", `Went to: ${after}`, "muted"));
+  const lines = live
+    ? [text("p", n.now ? "Playing now" : `Played ${ago(n.time)}`, "label"), text("p", t.title, "big"), text("p", `${t.artist} · ${name(n)}`)]
+    : [text("p", name(n), "big"), text("p", t.artist),
+      text("p", `${n.plays} play${n.plays > 1 ? "s" : ""} · ${n.now ? "playing now" : ago(n.time)}`, "muted")];
+  if (!live && before) lines.push(text("p", `After ${before}`, "muted"));
+  if (!live && after) lines.push(text("p", `Then ${after}`, "muted"));
   if (t.deezer) lines.push(Object.assign(text("a", "Open in Deezer"), { href: t.deezer, target: "_blank", rel: "noopener" }));
   const box = document.createElement("div");
   box.append(...lines);
-  info.replaceChildren(pic, box);
-}
-
-function renderKernels() {
-  kernelList.replaceChildren(...graph.kernels.map((members, i) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.dataset.key = `kernel:${i}`;
-    b.style.setProperty("--c", members[0].colour);
-    const top = [...members].sort((a, c) => c.plays - a.plays).slice(0, 3).map((n) => short(name(n), 22)).join(", ");
-    const more = members.length > 3 ? ` +${members.length - 3}` : "";
-    b.append(text("span", "", "dot"), text("span", `${top}${more} · ${total(members)} plays`));
-    b.addEventListener("click", () => select(selected === b.dataset.key ? null : b.dataset.key));
-    return b;
-  }));
+  card.replaceChildren(pic, box);
 }
 
 function markers() {
   const defs = el("defs", {});
-  for (const [id, fill] of [["head", "#8a8a93"], ["head-green", "#1db954"]]) {
+  for (const [id, fill] of [["head", "#9a9aa6"], ["head-green", "#1db954"]]) {
     const m = el("marker", { id, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, markerUnits: "userSpaceOnUse", orient: "auto" });
     m.append(el("path", { d: "M0,1 L9,5 L0,9 z", fill }));
     defs.append(m);
@@ -529,5 +594,12 @@ addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => graph && svg.clientWidth !== W && build(), 200);
 });
+const about = document.getElementById("about");
+about.addEventListener("click", () => {
+  const open = about.getAttribute("aria-expanded") !== "true";
+  about.setAttribute("aria-expanded", String(open));
+  document.getElementById("legend").hidden = !open;
+});
+
 load();
 setInterval(load, 60_000); // the server cache keeps this at one Last.fm call per minute at most
