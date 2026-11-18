@@ -67,7 +67,7 @@ def fake_get(url, params=None, timeout=None, **_):
         if net["deezer"] == "none":
             return Reply({"data": []})
         if net["deezer"] == "slow":
-            time.sleep(3)
+            time.sleep(net["deezer_delay"])
         return Reply({"data": [{"album": {"cover_medium": "https://cdn-images.dzcdn.net/images/cover/x/250x250.jpg"},
                                 "link": "https://www.deezer.com/track/1"}]})
     return Reply(raw=b"image bytes")  # image hosts
@@ -87,11 +87,20 @@ def check(name, ok, detail=""):
         failures.append(name)
 
 
+def settle():
+    """Let background work finish: the Last.fm refresh and the Deezer lookups."""
+    if server.refresher.is_alive():
+        server.refresher.join()
+    while server.looking_up:
+        time.sleep(0.02)
+
+
 def fresh(lastfm="ok", deezer="ok"):
     """Empty caches, as after a server restart."""
-    server.cache.update(payload=None, tried=0.0, error=None)
+    settle()
+    server.cache.update(plays=None, fetched_at=0, tried=0.0, error=None)
     server.deezer.clear()
-    net.update(lastfm=lastfm, deezer=deezer, lastfm_calls=0, slow_lastfm=0)
+    net.update(lastfm=lastfm, deezer=deezer, lastfm_calls=0, slow_lastfm=0, deezer_delay=3)
 
 
 def get():
@@ -160,8 +169,16 @@ check("five visitors at the same moment, one Last.fm call", net["lastfm_calls"] 
 check("...and all five get the music, none an error", all(c == 200 and b["tracks"] for c, b in answers),
       [c for c, _ in answers])
 server.cache["tried"] = 0  # the 60 s are over
+net["slow_lastfm"] = 1
+start = time.time()
+code, body = get()
+waited = time.time() - start
+check("after the cache time, the visitor gets the last data at once", code == 200 and body["tracks"] and waited < 0.5,
+      f"{waited:.1f} s")
+check("...while the server asks Last.fm in the background", body["refreshing"])
 get()
-check("after the cache time, one new call", net["lastfm_calls"] == 2, net["lastfm_calls"])
+settle()
+check("...with one new call, even after another reload", net["lastfm_calls"] == 2, net["lastfm_calls"])
 
 print("Done when: with Last.fm unreachable, the page shows a message")
 fresh("down")
@@ -179,17 +196,27 @@ fresh()
 get()
 server.cache["tried"] = 0
 net["lastfm"] = "down"
+get()  # starts the background refresh, which fails
+settle()
 code, body = get()
 check("unreachable after a success: last data kept, marked stale",
       code == 200 and body["stale"] and body["tracks"] and body["message"], body)
 fresh(deezer="slow")
-server.DEEZER_BUDGET, start = 0.5, time.time()
+net["deezer_delay"] = 1
+server.DEEZER_BUDGET, start = 0.3, time.time()
 code, body = get()
 waited = time.time() - start
 server.DEEZER_BUDGET = 3
-check("a slow Deezer does not hold the page", code == 200 and waited < 2, f"{waited:.1f} s")
+check("a slow Deezer does not hold the page", code == 200 and waited < 0.8, f"{waited:.1f} s")
+check("...shows Last.fm's cover meanwhile, and says a Deezer cover is coming",
+      body["pending"] == 1 and "dzcdn" not in body["tracks"][0]["cover"], body)
+settle()
+code, body = get()
+check("covers that arrive later are in the next answer", body["pending"] == 0 and "dzcdn" in body["tracks"][0]["cover"], body)
+check("...without asking Last.fm again", net["lastfm_calls"] == 1, net["lastfm_calls"])
 js = (ROOT / "static/app.js").read_text()
 check("the page has its own message when the server itself is down", "The server is not answering" in js)
+check("the page asks again soon while data or covers are on their way", "answer.refreshing || answer.pending" in js)
 
 print("Done when: it starts with docker compose up on a new copy")
 compose = (ROOT / "compose.yaml").read_text()

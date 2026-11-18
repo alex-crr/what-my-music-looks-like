@@ -17,6 +17,7 @@ let view = { x: 0, y: 0, k: 1 }; // pan and zoom
 let autoFit = true; // keep the whole graph in view until the visitor pans or zooms
 let alpha = 0, alphaTarget = 0, running = false; // the simulation's "heat": forces fade as it cools
 let W = 800, H = 500, layer = null;
+let soon = null; // timer to ask the server again while data or covers are on their way
 
 // ---------- data ----------
 
@@ -38,6 +39,9 @@ async function load() {
     svg.replaceChildren();
     info.replaceChildren(text("p", answer.message ? "Nothing to show yet." : "No music yet. Play something!", "empty"));
   }
+  // The server answered with what it had: fresher data or more covers are coming, so ask again shortly
+  clearTimeout(soon);
+  if (answer.refreshing || answer.pending) soon = setTimeout(load, 4000);
 }
 
 // From the list of plays (newest first) to albums (nodes) and "what came next" (edges).
@@ -176,15 +180,13 @@ function tick() {
   for (const members of kernels) {
     const cx = mean(members, "x"), cy = mean(members, "y");
     for (const n of members) {
-      n.vx += (cx - n.x) * 0.03 * alpha;
-      n.vy += (cy - n.y) * 0.03 * alpha;
+      n.vx += (cx - n.x) * 0.07 * alpha;
+      n.vy += (cy - n.y) * 0.07 * alpha;
     }
   }
-  // Pull to the middle, measured against a box shaped like the frame and sized so the circles cover
-  // about a third of it: the layout settles into the frame's shape (wide on a laptop, tall on a phone)
-  // and fills it, so Fit can zoom in further and the circles show bigger.
-  const area = nodes.reduce((s, n) => s + Math.PI * (n.r + 6) ** 2, 0) / FILL;
-  const boxH = Math.sqrt((area * H) / W), boxW = (boxH * W) / H;
+  // Pull to the middle, measured against a box shaped like the frame: the layout settles into
+  // the frame's shape (wide on a laptop, tall on a phone) and fills it, so the circles show bigger.
+  const [boxW, boxH] = box();
   for (const n of nodes) {
     n.vx -= (n.x / boxW) * PULL * alpha;
     n.vy -= (n.y / boxH) * PULL * alpha;
@@ -192,8 +194,9 @@ function tick() {
     n.vx *= 0.6; n.vy *= 0.6; // friction
     n.x += n.vx; n.y += n.vy;
   }
-  // circles never overlap
-  for (let i = 0; i < nodes.length; i++) {
+  // circles never overlap, once the layout has calmed down: while it is still moving fast they can pass
+  // through each other, so an album that starts on the wrong side doesn't get trapped inside another kernel
+  for (let i = 0; alpha < 0.3 && i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const a = nodes[i], b = nodes[j];
       const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, gap = a.r + b.r + 12;
@@ -204,6 +207,13 @@ function tick() {
     }
   }
   alpha += (alphaTarget - alpha) * 0.03; // cool down
+}
+
+// The box the layout fills: shaped like the frame, sized so the circles cover a share FILL of it.
+function box() {
+  const area = graph.nodes.reduce((s, n) => s + Math.PI * (n.r + 6) ** 2, 0) / FILL;
+  const h = Math.sqrt((area * H) / W);
+  return [(h * W) / H, h];
 }
 
 function reheat(a) {
@@ -226,25 +236,40 @@ function update() {
   const first = !graph;
   graph = model(data.tracks);
   const fresh = graph.nodes.filter((n) => !pos.has(n.key)).length;
+  size();
   place();
+  if (first) {
+    // Work out most of the layout before drawing it: the graph appears nearly in place, then settles
+    alpha = 1;
+    while (alpha > 0.1) tick();
+  }
   build();
-  if (fresh) reheat(first ? 1 : 0.3); // a new album: let the layout adjust; otherwise nothing moves
+  if (fresh) reheat(first ? 0.1 : 0.3); // a new album: let the layout adjust; otherwise nothing moves
 }
 
-// Start positions: where the album was last time, else next to the album played before it.
+// Start positions: where the album was last time; a new album next to the one played before it;
+// on a first layout, each kernel starts in its own part of the frame, so no album has to cross another kernel.
 function place() {
+  const [boxW, boxH] = box();
+  const count = graph.kernels.length;
   graph.nodes.forEach((n, i) => {
     const p = pos.get(n.key);
-    const from = !p && graph.edges.find((e) => e.to === n.key && pos.has(e.from));
-    const base = p || (from && pos.get(from.from)) || { x: 0, y: 0 };
-    const a = i * 2.4, d = p ? 0 : from ? 30 : 15 * Math.sqrt(i);
+    const from = !p && graph.edges.find((e) => e.to === n.key && pos.has(e.from) && graph.byKey.get(e.from).kernel === n.kernel);
+    const turn = (2 * Math.PI * n.kernel) / Math.max(1, count);
+    const anchor = n.kernel >= 0 && count > 1 ? { x: Math.cos(turn) * boxW * 0.3, y: Math.sin(turn) * boxH * 0.3 } : { x: 0, y: 0 };
+    const base = p || (from && pos.get(from.from)) || anchor;
+    const a = i * 2.4, d = p ? 0 : from ? 30 : 8 * Math.sqrt(i % 40);
     Object.assign(n, { x: base.x + Math.cos(a) * d, y: base.y + Math.sin(a) * d, vx: 0, vy: 0 });
   });
 }
 
-function build() {
+function size() {
   W = svg.clientWidth || 800;
   H = Math.round(W < 600 ? W * 1.15 : Math.max(420, Math.min(W * 0.6, innerHeight - 280)));
+}
+
+function build() {
+  size();
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   layer = el("g", {});
   svg.replaceChildren(markers(), layer);

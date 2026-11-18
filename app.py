@@ -25,8 +25,12 @@ PAUSE = 30 * 60  # seconds of silence that start a new listening session
 NO_COVER = "2a96cbd8b46e442fc41c2b86b821562f"  # Last.fm's grey star placeholder image
 
 app = Flask(__name__, static_folder="static", static_url_path="")
-cache = {"payload": None, "tried": 0.0, "error": None}  # one Last.fm answer, shared by every visitor
+cache = {"plays": None, "fetched_at": 0, "tried": 0.0, "error": None}  # one Last.fm answer, shared by every visitor
 lock = threading.Lock()  # many visitors at the same moment still make one call
+refresher = threading.Thread()  # the background refresh, when one is running
+looking_up = set()  # albums whose Deezer lookup is running, so one never starts twice
+lookup_lock = threading.Lock()
+MISSING = object()  # "not looked up yet", as opposed to None, "Deezer has no match"
 deezer = {}  # (artist, title) -> {"cover", "link"} or None; a match never changes, so it never expires
 pool = ThreadPoolExecutor(5)  # at most 5 Deezer lookups at once
 deezer_gate = threading.Lock()
@@ -176,18 +180,41 @@ def merge(recent):
     return [p for p in plays if p["key"] in keep]
 
 
-def build(plays):
+def known_cover(plays):
+    """The album's Deezer match if already looked up: a dict, None for no match, MISSING if not known yet."""
+    isrc = next((p["isrc"] for p in reversed(plays) if p.get("isrc")), "")
+    if isrc:
+        hit = deezer.get(("isrc", isrc), MISSING)
+        if hit is not None:
+            return hit  # a match, or not looked up yet (an ISRC Deezer doesn't know falls back to a search)
+    last = plays[-1]
+    return deezer.get((last["artist"].lower(), last["title"].lower()), MISSING)
+
+
+def look_up(key, plays):
+    """Start the album's Deezer lookup in the background, unless it is already running."""
+    with lookup_lock:
+        if key in looking_up:
+            return None
+        looking_up.add(key)
+    job = pool.submit(cover_for, plays)
+    job.add_done_callback(lambda _: looking_up.discard(key))
+    return job
+
+
+def build(plays, budget):
+    """Plays (newest first) with their covers, and how many covers Deezer hasn't given yet."""
     albums = defaultdict(list)
     for p in plays:
         albums[p["key"]].append(p)
-    jobs = {k: pool.submit(cover_for, ps) for k, ps in albums.items()}
-    # A slow or down Deezer must not hold the page: wait at most DEEZER_BUDGET seconds.
-    # Unfinished lookups keep running and fill the Deezer cache for the next refresh.
-    done, _ = wait(jobs.values(), timeout=DEEZER_BUDGET)
-    found = {k: job.result() if job in done else None for k, job in jobs.items()}
+    jobs = [look_up(k, ps) for k, ps in albums.items() if known_cover(ps) is MISSING]
+    jobs = [j for j in jobs if j]
+    if budget and jobs:
+        wait(jobs, timeout=budget)  # only on a first visit, when there is nothing else to show
+    covers = {k: known_cover(ps) for k, ps in albums.items()}
     out = []
     for p in reversed(plays):  # newest first, like Last.fm
-        match = found[p["key"]]
+        match = covers[p["key"]] if isinstance(covers[p["key"]], dict) else None
         lfm_cover = next((q["lastfm_cover"] for q in reversed(albums[p["key"]]) if q["lastfm_cover"]), "")
         out.append({
             "key": p["key"],
@@ -201,7 +228,23 @@ def build(plays):
             "deezer": match["link"] if match else None,
             "lastfm": p["lastfm"],
         })
-    return out
+    return out, sum(1 for c in covers.values() if c is MISSING)
+
+
+def refresh():
+    """Ask Last.fm (at most once per TTL, however many visitors) and merge with the history."""
+    with lock:
+        if time.time() - cache["tried"] < TTL:
+            return  # another visitor just did it
+        cache["tried"] = time.time()  # also after a failure: no retry storm while Last.fm is down
+        try:
+            plays = merge([from_lastfm(t) for t in lastfm_recent()])
+            cache.update(plays=plays, fetched_at=int(time.time()), error=None)
+        except LastfmError as e:
+            cache["error"] = f"Last.fm says: {e}."
+        except Exception as e:
+            print(f"[lastfm] failed: {type(e).__name__}", flush=True)  # not the message: it can hold the URL with the key
+            cache["error"] = "Last.fm is not answering right now."
 
 
 @app.get("/")
@@ -211,25 +254,24 @@ def index():
 
 @app.get("/api/recent")
 def recent():
+    global refresher
     if not (LASTFM_KEY and LASTFM_USER):
         return jsonify(message="The server has no Last.fm key or user. "
                                "Set LASTFM_API_KEY and LASTFM_USER in .env, then restart."), 503
-    with lock:
-        if time.time() - cache["tried"] >= TTL:  # also after a failure: no retry storm while Last.fm is down
-            cache["tried"] = time.time()
-            try:
-                tracks = build(merge([from_lastfm(t) for t in lastfm_recent()]))
-                cache.update(payload={"user": LASTFM_USER, "fetched_at": int(time.time()), "tracks": tracks,
-                                      "history_days": HISTORY_DAYS if history else 0}, error=None)
-            except LastfmError as e:
-                cache["error"] = f"Last.fm says: {e}."
-            except Exception as e:
-                print(f"[lastfm] failed: {type(e).__name__}", flush=True)  # not the message: it can hold the URL with the key
-                cache["error"] = "Last.fm is not answering right now."
-    payload, error = cache["payload"], cache["error"]
-    if payload is None:
+    first = cache["plays"] is None
+    if first:
+        refresh()  # nothing to show yet: this visit waits for Last.fm
+    elif time.time() - cache["tried"] >= TTL and not refresher.is_alive():
+        # Expired: answer at once with what we have and refresh in the background; the page asks again soon.
+        refresher = threading.Thread(target=refresh, daemon=True)
+        refresher.start()
+    plays, error = cache["plays"], cache["error"]
+    if plays is None:
         return jsonify(message=f"{error} Try again in a minute."), 502
-    return jsonify(**payload, stale=error is not None, message=error)
+    tracks, pending = build(plays, DEEZER_BUDGET if first else 0)
+    return jsonify(user=LASTFM_USER, fetched_at=cache["fetched_at"], tracks=tracks,
+                   history_days=HISTORY_DAYS if history else 0, stale=error is not None, message=error,
+                   refreshing=refresher.is_alive(), pending=pending)
 
 
 @app.get("/media")
