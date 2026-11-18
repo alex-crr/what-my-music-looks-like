@@ -5,7 +5,7 @@ const status = document.getElementById("status");
 const SVG = "http://www.w3.org/2000/svg";
 const COLOURS = ["#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#60a5fa", "#f87171", "#2dd4bf", "#fb923c"];
 const LONE = "#8a8a93"; // albums in no kernel
-const FOCAL = 10; // the most played albums: full colour, a glow, and they breathe
+const FOCAL = 10; // the most played albums: full colour, and they breathe
 const TRAIL = 12; // albums in the bright line of latest listening
 const REPEL = 120; // how hard circles push each other away
 const PULL = 150; // strength of the pull to the middle
@@ -290,15 +290,15 @@ function build() {
   const defs = markers();
   svg.replaceChildren(defs, layer);
 
-  // Kernel colour fields: a soft glow of the kernel's colour behind each of its albums
+  // Kernel colour fields: a faint tint of the kernel's colour behind each of its albums
   const fields = el("g", { class: "field" });
   graph.kernels.forEach((members, i) => {
     const glow = el("radialGradient", { id: `field${i}` });
-    glow.append(el("stop", { offset: 0, "stop-color": members[0].colour, "stop-opacity": 0.2 }),
+    glow.append(el("stop", { offset: 0, "stop-color": members[0].colour, "stop-opacity": 0.07 }),
       el("stop", { offset: 1, "stop-color": members[0].colour, "stop-opacity": 0 }));
     defs.append(glow);
     for (const n of members) {
-      n.fieldEl = el("circle", { r: n.r * 2.4 + 34, fill: `url(#field${i})` });
+      n.fieldEl = el("circle", { r: n.r * 1.8 + 26, fill: `url(#field${i})` });
       fields.append(n.fieldEl);
     }
   });
@@ -327,10 +327,9 @@ function build() {
     layer.append(e.el);
   });
 
-  // The trail: my latest listening as one bright flowing line
-  graph.trailGlow = el("path", { class: "trail-glow", "vector-effect": "non-scaling-stroke" });
+  // The trail: my latest listening as one fine line
   graph.trailEl = el("path", { class: "trail", "vector-effect": "non-scaling-stroke" });
-  layer.append(graph.trailGlow, graph.trailEl);
+  layer.append(graph.trailEl);
 
   graph.nodes.forEach((n, i) => {
     const g = el("g", {
@@ -352,8 +351,8 @@ function build() {
       img.addEventListener("error", () => { img.remove(); fallback(); });
       lens.append(clip, img);
     } else fallback();
-    lens.append(el("circle", { r: n.r, class: "ring" }));
-    if (n.now) lens.append(el("circle", { r: n.r + 5, class: "now-ring" }));
+    lens.append(el("circle", { r: n.r, class: "ring", "vector-effect": "non-scaling-stroke" })); // 1 px at every zoom
+    if (n.now) lens.append(el("circle", { r: n.r + 3, class: "now-ring", "vector-effect": "non-scaling-stroke" }));
     face.append(lens);
     g.append(face);
     g.addEventListener("pointerenter", (ev) => ev.pointerType === "mouse" && !drag && !pinned && select(n.key));
@@ -386,9 +385,7 @@ function render() {
       target.setAttribute("x2", x2); target.setAttribute("y2", y2);
     }
   }
-  const d = smooth(graph.trail.map((k) => graph.byKey.get(k)));
-  graph.trailEl.setAttribute("d", d);
-  graph.trailGlow.setAttribute("d", d);
+  graph.trailEl.setAttribute("d", smooth(graph.trail.map((k) => graph.byKey.get(k))));
 }
 
 // A smooth curve through the given circles' centres (Catmull-Rom turned into Bézier curves)

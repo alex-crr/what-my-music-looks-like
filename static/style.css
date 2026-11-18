@@ -42,12 +42,10 @@ main { padding: 0 20px; }
 .field { pointer-events: none; }
 .edge { fill: none; }
 .edge.pause { stroke-dasharray: 5 4; }
-.trail-glow { fill: none; stroke: var(--green); stroke-opacity: 0.18; stroke-width: 9; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
-.trail { fill: none; stroke: #b9f5cf; stroke-width: 2; stroke-linecap: round; stroke-dasharray: 2 9; pointer-events: none; animation: flow 1.2s linear infinite; }
-@keyframes flow { to { stroke-dashoffset: -11; } }
+.trail { fill: none; stroke: #fff; stroke-opacity: 0.4; stroke-width: 1; stroke-linecap: round; pointer-events: none; }
 
 /* while something is selected, only what belongs to it stays visible */
-#graph.focus .edge:not(.hl), #graph.focus .trail, #graph.focus .trail-glow { opacity: 0.04 !important; }
+#graph.focus .edge:not(.hl), #graph.focus .trail { opacity: 0.04 !important; }
 #graph.focus .node:not(.hl) { opacity: 0.2; }
 #graph.focus .field { opacity: 0.35; }
 
@@ -56,20 +54,21 @@ main { padding: 0 20px; }
 .node:hover .lens, .node.sel .lens { transform: scale(1.18); }
 .node image { opacity: 0.72; transition: opacity 0.2s; }
 .node.focal image, .node:hover image, .node.hl image { opacity: 1; }
-.node .ring { fill: none; stroke: var(--c); stroke-width: 1.5; }
-.node.focal .lens { filter: drop-shadow(0 0 7px var(--c)); }
-.node.sel .ring, .node:focus-visible .ring { stroke: #fff; stroke-width: 2.5; }
+.node .ring { fill: none; stroke: var(--c); stroke-width: 1; }
+.node.now .ring { stroke: var(--green); stroke-width: 1.5; }
+.node.sel .ring, .node:focus-visible .ring { stroke: #fff; stroke-width: 1.5; }
 .node .initials { fill: #fff; font-size: 9px; font-weight: 600; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 
 /* the most played albums breathe a little */
 .node.focal .face { animation: drift var(--dur) ease-in-out var(--delay) infinite alternate; }
 @keyframes drift { to { transform: translate(var(--dx), var(--dy)); } }
 
-.now-ring { fill: none; stroke: var(--green); stroke-width: 2.5; animation: pulse 2s infinite; }
-@keyframes pulse { 50% { stroke-width: 6; opacity: 0.5; } }
+/* playing now: a fine green ring that ripples outwards */
+.now-ring { fill: none; stroke: var(--green); stroke-width: 1.5; transform-box: fill-box; transform-origin: center; animation: ripple 2s ease-out infinite; }
+@keyframes ripple { from { transform: scale(1); opacity: 1; } to { transform: scale(1.5); opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .trail, .now-ring, .node.focal .face, #card.live img, #card.live .swatch { animation: none; }
+  .now-ring, .node.focal .face, #card.live img, #card.live .swatch { animation: none; }
 }
 
 /* footer card: the album hovered or tapped, otherwise what is playing now */
