@@ -5,6 +5,9 @@ const status = document.getElementById("status");
 const SVG = "http://www.w3.org/2000/svg";
 const COLOURS = ["#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#60a5fa", "#f87171", "#2dd4bf", "#fb923c"];
 const LONE = "#8a8a93"; // albums in no kernel
+const REPEL = 120; // how hard circles push each other away
+const PULL = 150; // strength of the pull to the middle
+const FILL = 0.15; // share of the frame the circles should cover
 
 const pos = new Map(); // album -> {x, y}, kept between refreshes so nothing jumps
 let data = null; // last answer from the server
@@ -14,7 +17,6 @@ let view = { x: 0, y: 0, k: 1 }; // pan and zoom
 let autoFit = true; // keep the whole graph in view until the visitor pans or zooms
 let alpha = 0, alphaTarget = 0, running = false; // the simulation's "heat": forces fade as it cools
 let W = 800, H = 500, layer = null;
-let ticks = 0; // steps since the first layout started
 
 // ---------- data ----------
 
@@ -157,7 +159,7 @@ function tick() {
       const a = nodes[i], b = nodes[j];
       const dx = b.x - a.x, dy = b.y - a.y, d2 = dx * dx + dy * dy || 1;
       if (d2 > 250000) continue; // further than 500: negligible
-      const f = (300 * alpha) / d2;
+      const f = (REPEL * alpha) / d2;
       a.vx -= dx * f; a.vy -= dy * f;
       b.vx += dx * f; b.vy += dy * f;
     }
@@ -178,10 +180,14 @@ function tick() {
       n.vy += (cy - n.y) * 0.03 * alpha;
     }
   }
-  const gx = (0.006 * H) / W, gy = (0.006 * W) / H; // pull to the middle, shaped like the frame
+  // Pull to the middle, measured against a box shaped like the frame and sized so the circles cover
+  // about a third of it: the layout settles into the frame's shape (wide on a laptop, tall on a phone)
+  // and fills it, so Fit can zoom in further and the circles show bigger.
+  const area = nodes.reduce((s, n) => s + Math.PI * (n.r + 6) ** 2, 0) / FILL;
+  const boxH = Math.sqrt((area * H) / W), boxW = (boxH * W) / H;
   for (const n of nodes) {
-    n.vx -= n.x * gx * alpha; // a tall phone frame gets a tall layout, a wide laptop frame a wide one
-    n.vy -= n.y * gy * alpha;
+    n.vx -= (n.x / boxW) * PULL * alpha;
+    n.vy -= (n.y / boxH) * PULL * alpha;
     if (n.fixed) { n.vx = n.vy = 0; continue; } // the circle being dragged follows the pointer
     n.vx *= 0.6; n.vy *= 0.6; // friction
     n.x += n.vx; n.y += n.vy;
@@ -190,7 +196,7 @@ function tick() {
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const a = nodes[i], b = nodes[j];
-      const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, gap = a.r + b.r + 4;
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, gap = a.r + b.r + 12;
       if (d >= gap) continue;
       const push = (gap - d) / 2 / d;
       if (!a.fixed) { a.x -= dx * push; a.y -= dy * push; }
@@ -200,15 +206,6 @@ function tick() {
   alpha += (alphaTarget - alpha) * 0.03; // cool down
 }
 
-// A force layout has no fixed orientation. Early in the first settling, turn it a quarter turn
-// if it is wide in a tall frame (phone) or tall in a wide frame (laptop), so it fills the frame.
-function orient() {
-  const xs = graph.nodes.map((n) => n.x), ys = graph.nodes.map((n) => n.y);
-  const wide = Math.max(...xs) - Math.min(...xs) > Math.max(...ys) - Math.min(...ys);
-  if (wide === W > H) return;
-  for (const n of graph.nodes) [n.x, n.y, n.vx, n.vy] = [-n.y, n.x, -n.vy, n.vx];
-}
-
 function reheat(a) {
   alpha = Math.max(alpha, a);
   if (!running) { running = true; requestAnimationFrame(step); }
@@ -216,7 +213,6 @@ function reheat(a) {
 
 function step() {
   tick();
-  if (++ticks === 60) orient();
   for (const n of graph.nodes) pos.set(n.key, { x: n.x, y: n.y });
   if (autoFit) fit();
   render();
