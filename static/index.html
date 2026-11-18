@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>What my music looks like</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>What my music looks like</h1>
+    <p id="status" aria-live="polite">Loading…</p>
+  </header>
+  <main>
+    <svg id="graph" role="img" aria-label="Albums I listened to, with arrows to what I played next"></svg>
+    <section id="info" aria-live="polite"></section>
+    <p class="legend">
+      Circle size: plays · Arrow: what came next · Thicker: happened more often ·
+      Faded: longer ago · Dashed: after a pause of 30 min or more · <span class="green">Green ring</span>: playing now.
+      Tap or hover a circle to follow its arrows.
+    </p>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

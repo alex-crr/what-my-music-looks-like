@@ -1,0 +1,17 @@
+# On the server, after visit-counter is up:
+#   docker compose -f compose.yaml -f compose.server.yaml up -d --build
+# No port is opened. The Caddy of the visit-counter project is the only front door:
+# it sends https://student04.wt.thomasjuldo.com/music/... to this container, through the shared "proxy" network.
+services:
+  web:
+    ports: !reset []
+    restart: unless-stopped
+    networks:
+      default:
+      proxy:
+        aliases: [music] # the name Caddy uses: reverse_proxy music:8081
+
+networks:
+  proxy:
+    name: proxy
+    external: true # created by visit-counter's compose.server.yaml

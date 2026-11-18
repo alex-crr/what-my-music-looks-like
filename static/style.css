@@ -1,0 +1,41 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  background: #0e0e10;
+  color: #eee;
+  --green: #1db954;
+}
+
+body { margin: 0; }
+header { padding: 16px 16px 0; }
+h1 { margin: 0; font-size: 1.4rem; }
+#status { margin: 4px 0 0; color: #aaa; }
+#status.warn { color: #f5b041; }
+main { padding: 8px 16px 24px; }
+
+#graph { display: block; width: 100%; height: auto; touch-action: manipulation; }
+
+.edge { fill: none; stroke: #a0a0a0; transition: opacity 0.2s; }
+.edge.pause { stroke-dasharray: 6 5; }
+.edge.latest { stroke: var(--green); }
+/* while a circle is selected, only its own arrows stay visible */
+#graph.focus .edge:not(.hl) { opacity: 0.06; }
+#graph.focus .node:not(.hl) { opacity: 0.35; }
+
+.node { cursor: pointer; outline: none; transition: opacity 0.2s; }
+.node .border { fill: none; stroke: #0e0e10; stroke-width: 2; }
+.node.sel .border, .node:focus-visible .border { stroke: #fff; stroke-width: 3; }
+.node .initials { fill: #fff; font-size: 12px; font-weight: 600; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+
+.ring { fill: none; stroke: var(--green); stroke-width: 4; animation: pulse 2s infinite; }
+@keyframes pulse { 50% { stroke-width: 8; opacity: 0.6; } }
+@media (prefers-reduced-motion: reduce) { .ring { animation: none; } }
+
+#info { display: flex; gap: 12px; align-items: center; min-height: 72px; margin-top: 8px; }
+#info img, #info .swatch { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; flex: none; }
+#info p { margin: 0; line-height: 1.4; }
+#info .muted, .legend { color: #aaa; font-size: 0.85rem; }
+#info a { color: #9cf; }
+.legend { margin: 12px 0 0; }
+.green { color: var(--green); }
+.empty { padding: 32px 0; color: #aaa; }
