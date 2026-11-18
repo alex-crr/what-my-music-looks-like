@@ -46,6 +46,7 @@ main { padding: 0 20px; }
 
 /* while something is selected, only what belongs to it stays visible */
 #graph.focus .edge:not(.hl) { opacity: 0.04 !important; }
+#graph.focus .edge.hl { marker-end: url(#arrow); } /* direction, only for the hovered album */
 #graph.focus .node:not(.hl) { opacity: 0.2; }
 #graph.focus .field { opacity: 0.35; }
 .band { stroke-opacity: 0.35; stroke-linecap: round; pointer-events: none; transition: opacity 0.2s; }

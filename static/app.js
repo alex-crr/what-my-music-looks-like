@@ -7,6 +7,7 @@ const COLOURS = ["#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#60a5fa", "#f87171
 const LONE = "#8a8a93"; // albums in no kernel
 const FOCAL = 10; // the most played albums: full colour
 const REPEL = 120; // how hard circles push each other away
+const MOAT = 60; // empty space kept around each kernel, so kernels stand as separate islands
 const PULL = 150; // strength of the pull to the middle
 const FILL = 0.15; // share of the frame the circles should cover
 
@@ -209,12 +210,12 @@ function tick() {
     n.vx *= 0.6; n.vy *= 0.6; // friction
     n.x += n.vx; n.y += n.vy;
   }
-  // circles never overlap, once the layout has calmed down: while it is still moving fast they can pass
+  // circles never overlap (and keep a MOAT from other kernels), once the layout has calmed down: while it is still moving fast they can pass
   // through each other, so an album that starts on the wrong side doesn't get trapped inside another kernel
   for (let i = 0; alpha < 0.3 && i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const a = nodes[i], b = nodes[j];
-      const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, gap = a.r + b.r + 12;
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, gap = a.r + b.r + (a.kernel === b.kernel ? 12 : MOAT);
       if (d >= gap) continue;
       const push = (gap - d) / 2 / d;
       if (!a.fixed) { a.x -= dx * push; a.y -= dy * push; }
@@ -289,6 +290,10 @@ function build() {
   layer = el("g", {});
   const defs = el("defs", {});
   svg.replaceChildren(defs, layer);
+  // the arrowhead of a hovered album's lines (style.css), painted in its line's colour
+  const arrow = el("marker", { id: "arrow", viewBox: "0 0 10 10", refX: 10, refY: 5, markerWidth: 4, markerHeight: 4, markerUnits: "userSpaceOnUse", orient: "auto" });
+  arrow.append(el("path", { d: "M0,1.5 L10,5 L0,8.5 z", fill: "context-stroke" }));
+  defs.append(arrow);
 
   // Kernel colour fields: a faint tint of the kernel's colour behind each of its albums
   const fields = el("g", { class: "field" });
@@ -305,7 +310,7 @@ function build() {
   layer.append(fields);
 
   // Bands between kernels: one per pair of kernels I often go between, from centre to centre,
-  // wider the more often, fading from one kernel's colour to the other's
+  // wider the more often, in neutral grey: colour means kernel, and a band belongs to two
   const between = new Map();
   for (const e of graph.edges) {
     const a = graph.byKey.get(e.from).kernel, b = graph.byKey.get(e.to).kernel;
@@ -315,28 +320,20 @@ function build() {
   }
   graph.bands = [...between.values()].filter((p) => p.count >= 3); // ponytail: fixed threshold, make it relative if real data shows too many or none
   graph.bands.forEach((p, i) => {
-    p.grad = el("linearGradient", { id: `band${i}`, gradientUnits: "userSpaceOnUse" });
-    p.grad.append(el("stop", { offset: 0, "stop-color": COLOURS[p.a % COLOURS.length] }), el("stop", { offset: 1, "stop-color": COLOURS[p.b % COLOURS.length] }));
-    defs.append(p.grad);
-    p.el = el("line", { class: "band", stroke: `url(#band${i})`, "stroke-width": 2 + 2 * Math.log2(p.count), "vector-effect": "non-scaling-stroke" });
+    p.el = el("line", { class: "band", stroke: LONE, "stroke-width": 2 + 2 * Math.log2(p.count), "vector-effect": "non-scaling-stroke" });
     layer.append(p.el);
   });
 
-  // Lines take their kernel's colour; a line between two kernels fades from one colour to the other.
+  // Lines take their kernel's colour; a line between two kernels is neutral grey.
   // Only transitions inside a session are drawn, and those that happened once only show on hover.
   const flowing = new Set(graph.flow.slice(1).map((k, i) => `${graph.flow[i]}→${k}`)); // the flow's lines
-  graph.edges.sort((a, b) => a.step - b.step).forEach((e, i) => { // recent lines drawn last, on top
+  graph.edges.sort((a, b) => a.step - b.step).forEach((e) => { // recent lines drawn last, on top
     if (!e.together) return; // only ever after a pause: still weighs on the kernels, not drawn
     const a = graph.byKey.get(e.from), b = graph.byKey.get(e.to);
     const inner = a.colour === b.colour;
-    if (!inner) {
-      e.grad = el("linearGradient", { id: `line${i}`, gradientUnits: "userSpaceOnUse" });
-      e.grad.append(el("stop", { offset: 0, "stop-color": a.colour }), el("stop", { offset: 1, "stop-color": b.colour }));
-      defs.append(e.grad);
-    }
     e.el = el("line", {
       class: `edge${e.together === 1 ? " once" : ""}${flowing.has(e.id) ? " flow" : ""}`,
-      stroke: inner ? a.colour : `url(#line${i})`,
+      stroke: inner ? a.colour : LONE,
       "stroke-width": 0.75 * (1 + Math.log2(e.together)),
       "vector-effect": "non-scaling-stroke", // same thickness at every zoom
       // recent = brighter, old = fainter; lines between two kernels fainter, so the kernels stand out
@@ -392,10 +389,8 @@ function render(only) { // only: a Set of circles to redraw, with their lines; d
   const centre = (k) => [mean(graph.kernels[k], "x"), mean(graph.kernels[k], "y")];
   for (const p of only ? [] : graph.bands) { // bands follow the layout, not the push
     const [x1, y1] = centre(p.a), [x2, y2] = centre(p.b);
-    for (const target of [p.el, p.grad]) {
-      target.setAttribute("x1", x1.toFixed(1)); target.setAttribute("y1", y1.toFixed(1));
-      target.setAttribute("x2", x2.toFixed(1)); target.setAttribute("y2", y2.toFixed(1));
-    }
+    p.el.setAttribute("x1", x1.toFixed(1)); p.el.setAttribute("y1", y1.toFixed(1));
+    p.el.setAttribute("x2", x2.toFixed(1)); p.el.setAttribute("y2", y2.toFixed(1));
   }
   for (const e of graph.edges) {
     if (!e.el) continue;
@@ -405,10 +400,8 @@ function render(only) { // only: a Set of circles to redraw, with their lines; d
     // from edge to edge of the two circles
     const x1 = (px(a) + (dx / d) * pr(a)).toFixed(1), y1 = (py(a) + (dy / d) * pr(a)).toFixed(1);
     const x2 = (px(b) - (dx / d) * pr(b)).toFixed(1), y2 = (py(b) - (dy / d) * pr(b)).toFixed(1);
-    for (const target of e.grad ? [e.el, e.grad] : [e.el]) {
-      target.setAttribute("x1", x1); target.setAttribute("y1", y1);
-      target.setAttribute("x2", x2); target.setAttribute("y2", y2);
-    }
+    e.el.setAttribute("x1", x1); e.el.setAttribute("y1", y1);
+    e.el.setAttribute("x2", x2); e.el.setAttribute("y2", y2);
   }
 }
 
@@ -600,7 +593,7 @@ addEventListener("resize", () => {
 // 2. My latest listening flows: each of the last 12 albums leans toward the one I played next, then lets go,
 //    in a wave running from the oldest to the newest.
 // Reduced motion: the beat stays half-grown and the flow stays still.
-const HEARTBEAT = 2500; // ms per beat: 24 a minute, slow and calm
+const HEARTBEAT = 3000; // ms per beat: 20 a minute, slow and calm
 const FLOW = 4000; // ms per wave of the flow
 const swell = (x, at) => Math.exp(-(((x - at) / 0.06) ** 2)); // one quick bump centred on "at" (fraction of a beat)
 const still = matchMedia("(prefers-reduced-motion: reduce)");
@@ -612,7 +605,7 @@ function animate(t) {
     for (const n of graph.nodes) n.ox = n.oy = 0;
     const now = graph.nodes.find((n) => n.now);
     if (now) {
-      const peak = 12 + 0.4 * now.r;
+      const peak = 9 + 0.3 * now.r;
       const x = (t % HEARTBEAT) / HEARTBEAT;
       const grow = still.matches ? peak / 2 : peak * (swell(x, 0.15) + 0.6 * swell(x, 0.35));
       now.k = (now.r + grow) / now.r;
