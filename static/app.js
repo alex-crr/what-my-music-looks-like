@@ -599,7 +599,7 @@ addEventListener("resize", () => {
 // The album playing now beats like a heart: two quick swells (lub-dub), then a rest, pushing the circles around it
 // aside and letting them back.
 // The push is only drawn: the layout itself doesn't move. Reduced motion: it stays half-grown, still.
-const HEARTBEAT = 1000; // ms per beat: 60 a minute
+const HEARTBEAT = 2500; // ms per beat: 24 a minute, slow and calm
 const swell = (x, at) => Math.exp(-(((x - at) / 0.06) ** 2)); // one quick bump centred on "at" (fraction of a beat)
 const still = matchMedia("(prefers-reduced-motion: reduce)");
 let lastGrow = -1;
