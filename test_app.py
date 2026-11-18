@@ -6,10 +6,12 @@ Last.fm, Deezer and the image hosts are replaced by fakes at the `requests.get` 
 so the real server code runs: parsing, cache, lock, error messages, image proxy.
 Items that need a real browser or Docker are listed at the end as manual checks.
 """
+import csv
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -18,7 +20,8 @@ import requests
 
 ROOT = Path(__file__).parent
 KEY = "fake-key-0123456789abcdef"
-os.environ.update(LASTFM_API_KEY=KEY, LASTFM_USER="me")
+HISTORY = Path(tempfile.mkdtemp()) / "history.csv"  # never your real data/deezer_history.csv
+os.environ.update(LASTFM_API_KEY=KEY, LASTFM_USER="me", HISTORY_FILE=str(HISTORY))
 import app as server  # noqa: E402
 
 # ---------- fake internet ----------
@@ -26,7 +29,7 @@ import app as server  # noqa: E402
 TRACK = {"artist": {"#text": "Daft Punk"}, "name": "One More Time", "album": {"#text": "Discovery"},
          "date": {"uts": "1700000000"}, "url": "https://www.last.fm/music/x",
          "image": [{"#text": "https://img.some-new-lastfm-cdn.example/i/u/300x300/abc.png"}]}  # any host: Last.fm has changed it before
-net = {"lastfm": "ok", "deezer": "ok", "lastfm_calls": 0, "slow_lastfm": 0}
+net = {"lastfm": "ok", "deezer": "ok", "lastfm_calls": 0, "slow_lastfm": 0, "isrc_calls": 0}
 logs = []
 server.print = lambda *a, **k: logs.append(" ".join(map(str, a)))  # capture the server's log lines
 
@@ -42,7 +45,7 @@ class Reply:
         return self.body
 
 
-def fake_get(url, params=None, timeout=None):
+def fake_get(url, params=None, timeout=None, **_):
     if url == server.LASTFM_URL:
         net["lastfm_calls"] += 1
         time.sleep(net["slow_lastfm"])
@@ -54,6 +57,12 @@ def fake_get(url, params=None, timeout=None):
         if mode == "error":
             return Reply({"error": 6, "message": "User not found"}, 404)
         return Reply({"recenttracks": {"track": TRACK}})  # one track: an object, not a list, like the real Last.fm
+    if url.startswith(server.DEEZER_ISRC):
+        net["isrc_calls"] += 1
+        if url.endswith("UNKNOWN"):
+            return Reply({"error": {"type": "DataException", "message": "no data", "code": 800}})
+        return Reply({"album": {"cover_medium": "https://cdn-images.dzcdn.net/images/cover/isrc/250x250.jpg"},
+                      "link": "https://www.deezer.com/track/2"})
     if url == server.DEEZER_SEARCH:
         if net["deezer"] == "none":
             return Reply({"data": []})
@@ -190,6 +199,44 @@ code, body = get()
 server.LASTFM_KEY = KEY
 check("no key: the server runs and says what is missing", code == 503 and "LASTFM_API_KEY" in body["message"], body)
 check("the page itself is served", client.get("/").status_code == 200)
+
+print("Deezer history (optional, from import_deezer.py)")
+now = int(time.time())
+lfm_start = now - 3600  # the fake Last.fm track: one hour ago
+TRACK["date"] = {"uts": str(lfm_start)}
+rows = [  # (seconds ago, title, artist, album, isrc)
+    (40 * 86400, "Too old", "Old Band", "Old Album", "OLD1"),                   # outside the 30-day window
+    (5 * 3600, "Song A", "Band A", "Album A", "ISRCA"),                          # session 0
+    (5 * 3600 - 200, "Song B", "Band B, Guest", "Album B", "ISRCB"),             # session 0 (same artist key as "Band B")
+    (2 * 3600, "Song C", "Band C", "Album C", "UNKNOWN"),                        # new session after a 2 h pause
+    (1800, "Played after Last.fm started", "Band A", "Album A", "ISRCA"),       # Last.fm already has this period
+]
+with HISTORY.open("w", newline="", encoding="utf-8") as f:
+    w = csv.writer(f)
+    w.writerow(["played_at", "title", "artist", "album", "isrc"])
+    w.writerows([[now - ago, t, a, al, i] for ago, t, a, al, i in sorted(rows, key=lambda r: -r[0])])
+server.history = server.load_history()
+fresh()
+code, body = get()
+titles = [t["title"] for t in body["tracks"]]
+check("history plays come before Last.fm, newest first", titles == ["One More Time", "Song C", "Song B", "Song A"], titles)
+check("plays older than the window are left out", "Too old" not in titles)
+check("plays after Last.fm's first play are not counted twice", "Played after Last.fm started" not in titles)
+sessions = [t["session"] for t in body["tracks"]]
+check("a pause of 30 min or more starts a new session", sessions == [2, 1, 0, 0], sessions)
+check("albums match on the first artist ('Band B, Guest' = 'Band B')", body["tracks"][2]["key"] == "album b|band b")
+check("history covers come from Deezer by ISRC", body["tracks"][3]["cover"].endswith("isrc%2F250x250.jpg"), body["tracks"][3]["cover"])
+check("an unknown ISRC falls back to a search", "dzcdn" in body["tracks"][1]["cover"])
+check("the browser gets no ISRC", all("isrc" not in t for t in body["tracks"]))
+real = ROOT / "data" / "deezer_history.csv"
+if real.exists():
+    with real.open(encoding="utf-8") as f:
+        header = next(csv.reader(f))
+    check("your history file holds only time, title, artist, album, ISRC", header == ["played_at", "title", "artist", "album", "isrc"], header)
+check("data/ and *.xlsx are kept out of git", "data/" in gitignore and "*.xlsx" in gitignore)
+check("...and out of the Docker image", {"data", "*.xlsx"} <= set((ROOT / ".dockerignore").read_text().split()))
+server.history = []
+TRACK["date"] = {"uts": "1700000000"}
 
 print("\nManual checks (need a browser, Docker or your GitHub):")
 print("  - docker compose up --build on a fresh clone, then open http://localhost:8081")

@@ -4,7 +4,7 @@ My recent listening as a graph in the style of Obsidian's graph view: albums are
 
 Drag a circle, scroll or pinch to zoom, drag the background to move, **Fit** to see everything again. Hover or tap a circle to keep only its lines and see, under the graph, where I usually come from and go to; tap a kernel under the graph to see only that kernel.
 
-The data comes from Last.fm (`user.getRecentTracks`, the last 200 plays), fed by a scrobbler on my phone. The covers come from the Deezer API, which has better covers than Last.fm. Last.fm's own image is used when Deezer finds nothing.
+The data comes from Last.fm (`user.getRecentTracks`, the last 200 plays), fed by a scrobbler on my phone, with my Deezer listening history underneath when it is there (see below). The covers come from the Deezer API, which has better covers than Last.fm. Last.fm's own image is used when Deezer finds nothing.
 
 ## How the graph is built (`static/app.js`)
 
@@ -55,6 +55,29 @@ browser ──> this server (Flask, port 8081) ──> Last.fm  (recent tracks, 
 - **Last.fm unreachable:** start without network, or set a wrong user in `.env`. The page shows a message.
 - **Key not on GitHub:** `git log -p | grep -i <your key>` finds nothing.
 
+## Deezer history (optional)
+
+Last.fm only knows what was scrobbled since I installed the scrobbler. Deezer's personal-data export (account settings > Personal data) holds every play since 2021. The server can add it under Last.fm:
+
+```sh
+pip install openpyxl
+python import_deezer.py path/to/deezer-data.xlsx     # writes data/deezer_history.csv
+```
+
+- **Only what the graph needs** is kept: start time (UTC), title, artist, album, ISRC. The export's email, birth date, device and the IP address of every play are left out. Plays under 30 s are skipped, as Last.fm does.
+- **No play counted twice**: the history is used up to the first play Last.fm knows; Last.fm takes over from there.
+- **Last 30 days, 120 most played albums**, plus the albums of the latest plays, so what is playing now is always there. Change with `HISTORY_DAYS` and `TOP_ALBUMS` in `.env`.
+- **Sessions** are counted on the full sequence, before any album is left out, so a hidden album between two shown ones doesn't fake a pause.
+- **Covers** come from Deezer by ISRC (an exact match). Deezer allows about 50 calls per 5 s, so the server spaces its calls; after a restart, all covers are there within about 15 s.
+- `data/` and `*.xlsx` are in `.gitignore` and `.dockerignore`: the history never goes to GitHub or into the image. `compose.yaml` mounts `data/` read-only. Without it, the app uses Last.fm alone.
+
+On the server, copy the file next to the app and restart it (the history is read at start):
+
+```sh
+scp data/deezer_history.csv root@student04.wt.thomasjuldo.com:~/what-my-music-looks-like/data/
+docker compose -f compose.yaml -f compose.server.yaml up -d --build
+```
+
 ## Deploy: https://student04.wt.thomasjuldo.com/music/
 
 The server already runs the visit-counter project. Its Caddy owns ports 80/443 and the HTTPS certificate, and it also serves this app under `/music/`. This app has no Caddy of its own and opens no port: it joins the shared `proxy` network under the name `music`.
@@ -100,4 +123,5 @@ It checks the assignment's "Done when" list item by item, with Last.fm, Deezer a
 | `Dockerfile`, `compose.yaml` | Build and start |
 | `compose.server.yaml` | Server additions: no open port, joins the shared `proxy` network |
 | `.env.example` | The two variables to set |
+| `import_deezer.py` | Deezer export (.xlsx) to `data/deezer_history.csv` |
 | `test_app.py` | Self-check |

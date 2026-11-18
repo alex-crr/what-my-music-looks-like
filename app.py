@@ -1,8 +1,11 @@
 """What my music looks like: the browser talks only to this server, this server talks to Last.fm and Deezer."""
+import csv
 import os
 import threading
 import time
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, wait
+from pathlib import Path
 from urllib.parse import quote
 
 import requests
@@ -14,19 +17,38 @@ TTL = int(os.environ.get("CACHE_SECONDS", "60"))  # how long one Last.fm answer 
 DEEZER_BUDGET = 3  # seconds the page waits for covers; the rest arrive on a later refresh
 LASTFM_URL = "https://ws.audioscrobbler.com/2.0/"
 DEEZER_SEARCH = "https://api.deezer.com/search"
+DEEZER_ISRC = "https://api.deezer.com/track/isrc:"
+HISTORY_FILE = Path(os.environ.get("HISTORY_FILE", Path(__file__).parent / "data" / "deezer_history.csv"))
+HISTORY_DAYS = int(os.environ.get("HISTORY_DAYS", "30"))  # how far back the graph goes when there is a history
+TOP_ALBUMS = int(os.environ.get("TOP_ALBUMS", "120"))  # most played albums shown, plus the latest ones
+PAUSE = 30 * 60  # seconds of silence that start a new listening session
 NO_COVER = "2a96cbd8b46e442fc41c2b86b821562f"  # Last.fm's grey star placeholder image
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 cache = {"payload": None, "tried": 0.0, "error": None}  # one Last.fm answer, shared by every visitor
 lock = threading.Lock()  # many visitors at the same moment still make one call
 deezer = {}  # (artist, title) -> {"cover", "link"} or None; a match never changes, so it never expires
-pool = ThreadPoolExecutor(5)  # at most 5 Deezer searches at once (Deezer limits request rate)
+pool = ThreadPoolExecutor(5)  # at most 5 Deezer lookups at once
+deezer_gate = threading.Lock()
+deezer_last = [0.0]  # time of the last Deezer call
 media = {}  # url -> (content type, bytes); ponytail: in memory, lost on restart
 issued = set()  # cover URLs this server put in /api/recent: the only ones /media will fetch
 
 
 class LastfmError(Exception):
     """Last.fm answered, but with an error (wrong user, bad key, rate limit)."""
+
+
+def load_history():
+    """Deezer listening history made by import_deezer.py. Optional: without it, Last.fm alone is used."""
+    if not HISTORY_FILE.exists():
+        return []
+    with HISTORY_FILE.open(encoding="utf-8") as f:
+        return [{**row, "played_at": int(row["played_at"]), "now_playing": False, "lastfm_cover": "", "lastfm": None}
+                for row in csv.DictReader(f)]
+
+
+history = load_history()  # read once at start: restart the server after a new import
 
 
 def as_list(x):
@@ -46,6 +68,16 @@ def lastfm_recent():
     return as_list(data["recenttracks"].get("track"))
 
 
+def deezer_get(url, **params):
+    """Deezer allows about 50 calls per 5 s: space them 0.1 s apart, whatever the number of threads."""
+    with deezer_gate:
+        pause = deezer_last[0] + 0.1 - time.time()
+        if pause > 0:
+            time.sleep(pause)
+        deezer_last[0] = time.time()
+    return requests.get(url, params=params, timeout=5).json()
+
+
 def deezer_match(artist, title):
     key = (artist.lower(), title.lower())
     if key in deezer:
@@ -53,7 +85,7 @@ def deezer_match(artist, title):
     hit = None
     try:
         for q in (f'artist:"{artist}" track:"{title}"', f"{artist} {title}"):  # strict first, then loose
-            data = requests.get(DEEZER_SEARCH, params={"q": q, "limit": 1}, timeout=5).json()
+            data = deezer_get(DEEZER_SEARCH, q=q, limit=1)
             if "error" in data:  # quota or outage: don't remember, try again next time
                 return None
             if data.get("data"):
@@ -66,6 +98,32 @@ def deezer_match(artist, title):
     return deezer[key]
 
 
+def deezer_by_isrc(isrc):
+    """Exact match: the history gives each track's ISRC, Deezer finds the track from it."""
+    key = ("isrc", isrc)
+    if key in deezer:
+        return deezer[key]
+    try:
+        data = deezer_get(DEEZER_ISRC + isrc)
+    except (requests.RequestException, ValueError):
+        return None
+    if "error" in data:
+        if data["error"].get("code") == 800:  # 800 = no such track: remember the miss
+            deezer[key] = None
+        return None  # quota or outage: try again next time
+    deezer[key] = {"cover": data.get("album", {}).get("cover_medium"), "link": data.get("link")}
+    return deezer[key]
+
+
+def cover_for(plays):
+    """Deezer cover of one album, from any of its plays: ISRC when the history has one, else a search."""
+    isrc = next((p["isrc"] for p in reversed(plays) if p.get("isrc")), "")
+    found = deezer_by_isrc(isrc) if isrc else None
+    if isrc and ("isrc", isrc) not in deezer:
+        return None  # Deezer busy or down: try again at the next refresh, don't spend calls on a search
+    return found or deezer_match(plays[-1]["artist"], plays[-1]["title"])
+
+
 def proxied(url):
     if not url:
         return None
@@ -74,29 +132,74 @@ def proxied(url):
     return f"media?url={quote(url, safe='')}"
 
 
-def build(tracks):
-    pairs = {(t["artist"]["#text"], t["name"]) for t in tracks}
-    jobs = {p: pool.submit(deezer_match, *p) for p in pairs}
+def from_lastfm(t):
+    """One Last.fm track as one play."""
+    cover = next((i["#text"] for i in reversed(t.get("image", [])) if i.get("#text")), "")
+    return {
+        "artist": t["artist"]["#text"],
+        "title": t["name"],
+        "album": t.get("album", {}).get("#text", ""),
+        "isrc": "",
+        "played_at": int(t["date"]["uts"]) if "date" in t else None,  # no date = playing now
+        "now_playing": t.get("@attr", {}).get("nowplaying") == "true",
+        "lastfm_cover": "" if NO_COVER in cover else cover,
+        "lastfm": t.get("url"),
+    }
+
+
+def album_key(p):
+    # "Billie Eilish, Khalid" on Deezer is "Billie Eilish" on Last.fm: compare on the first artist
+    return f"{(p['album'] or p['title']).lower()}|{p['artist'].split(', ')[0].lower()}"
+
+
+def merge(recent):
+    """Deezer history for the past, Last.fm from its first play on, cut to the albums worth drawing.
+
+    Returns plays oldest first, each with its album key and listening-session number."""
+    times = [p["played_at"] for p in recent if p["played_at"]]
+    now = time.time()
+    start_lastfm = min(times, default=now)  # the history stops where Last.fm starts: no play counted twice
+    since = now - HISTORY_DAYS * 86400
+    past = [dict(p) for p in history if since <= p["played_at"] < start_lastfm]
+    plays = past + sorted(recent, key=lambda p: p["played_at"] or now)
+    session, last = 0, None
+    for p in plays:  # sessions on the full sequence, before any album is left out
+        t = p["played_at"] or now
+        if last is not None and t - last >= PAUSE:
+            session += 1
+        p.update(session=session, key=album_key(p))
+        last = t
+    if not past:
+        return plays  # Last.fm alone: few enough to draw everything
+    counts = Counter(p["key"] for p in plays)
+    keep = {k for k, _ in counts.most_common(TOP_ALBUMS)} | {p["key"] for p in plays[-20:]}  # always the latest
+    return [p for p in plays if p["key"] in keep]
+
+
+def build(plays):
+    albums = defaultdict(list)
+    for p in plays:
+        albums[p["key"]].append(p)
+    jobs = {k: pool.submit(cover_for, ps) for k, ps in albums.items()}
     # A slow or down Deezer must not hold the page: wait at most DEEZER_BUDGET seconds.
     # Unfinished lookups keep running and fill the Deezer cache for the next refresh.
     done, _ = wait(jobs.values(), timeout=DEEZER_BUDGET)
-    found = {p: job.result() if job in done else None for p, job in jobs.items()}
+    found = {k: job.result() if job in done else None for k, job in jobs.items()}
     out = []
-    for t in tracks:
-        artist, title = t["artist"]["#text"], t["name"]
-        match = found[(artist, title)]
-        lfm_cover = next((i["#text"] for i in reversed(t.get("image", [])) if i.get("#text")), "")
-        if NO_COVER in lfm_cover:
-            lfm_cover = ""
+    for p in reversed(plays):  # newest first, like Last.fm
+        match = found[p["key"]]
+        lfm_cover = next((q["lastfm_cover"] for q in reversed(albums[p["key"]]) if q["lastfm_cover"]), "")
         out.append({
-            "artist": artist,
-            "title": title,
-            "album": t.get("album", {}).get("#text", ""),
-            "played_at": int(t["date"]["uts"]) if "date" in t else None,  # no date = playing now
-            "now_playing": t.get("@attr", {}).get("nowplaying") == "true",
+            "key": p["key"],
+            "artist": p["artist"],
+            "title": p["title"],
+            "album": p["album"],
+            "played_at": p["played_at"],
+            "now_playing": p["now_playing"],
+            "session": p["session"],
             "cover": proxied((match and match["cover"]) or lfm_cover),  # Deezer cover first, Last.fm as fallback
             "deezer": match["link"] if match else None,
-            "lastfm": t.get("url"),
+            "lastfm": p["lastfm"],
         })
     return out
 
@@ -115,8 +218,9 @@ def recent():
         if time.time() - cache["tried"] >= TTL:  # also after a failure: no retry storm while Last.fm is down
             cache["tried"] = time.time()
             try:
-                tracks = build(lastfm_recent())
-                cache.update(payload={"user": LASTFM_USER, "fetched_at": int(time.time()), "tracks": tracks}, error=None)
+                tracks = build(merge([from_lastfm(t) for t in lastfm_recent()]))
+                cache.update(payload={"user": LASTFM_USER, "fetched_at": int(time.time()), "tracks": tracks,
+                                      "history_days": HISTORY_DAYS if history else 0}, error=None)
             except LastfmError as e:
                 cache["error"] = f"Last.fm says: {e}."
             except Exception as e:

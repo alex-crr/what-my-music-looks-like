@@ -3,7 +3,6 @@ const info = document.getElementById("info");
 const kernelList = document.getElementById("kernels");
 const status = document.getElementById("status");
 const SVG = "http://www.w3.org/2000/svg";
-const PAUSE = 30 * 60; // seconds of silence that start a new listening session
 const COLOURS = ["#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#60a5fa", "#f87171", "#2dd4bf", "#fb923c"];
 const LONE = "#8a8a93"; // albums in no kernel
 
@@ -27,7 +26,8 @@ async function load() {
   status.classList.toggle("warn", Boolean(answer.message));
   status.textContent = answer.message
     ? answer.message + (answer.fetched_at ? ` Showing music from ${clock(answer.fetched_at)}.` : "")
-    : `${answer.user} · updated ${clock(answer.fetched_at)}`;
+    : `${answer.user} · updated ${clock(answer.fetched_at)}` +
+      (answer.history_days ? ` · last ${answer.history_days} days with my Deezer history, most played albums` : "");
 
   if (answer.tracks?.length) {
     data = answer;
@@ -45,7 +45,7 @@ function model(tracks) {
   const edges = new Map();
   let prev = null;
   plays.forEach((t, step) => {
-    const key = `${t.album || t.title}|${t.artist}`;
+    const key = t.key; // album, from the server
     const time = t.played_at ?? Date.now() / 1000; // the track playing now has no date yet
     const n = nodes.get(key) || { key, plays: 0, now: false };
     Object.assign(n, { latest: t, time });
@@ -55,7 +55,7 @@ function model(tracks) {
 
     // Same album twice in a row: no line, the circle just gets bigger
     if (prev && prev.key !== key) {
-      const pause = time - prev.time >= PAUSE;
+      const pause = t.session !== prev.session; // sessions come from the server, counted before albums were left out
       const id = `${prev.key}→${key}`;
       const e = edges.get(id) || { id, from: prev.key, to: key, count: 0, weight: 0 };
       e.count += 1;
@@ -64,7 +64,7 @@ function model(tracks) {
       e.pause = pause;
       edges.set(id, e);
     }
-    prev = { key, time };
+    prev = { key, session: t.session };
   });
   const list = [...nodes.values()];
   // size weighted against my most played album: played once = small dot, most played = biggest circle
@@ -263,7 +263,8 @@ function build() {
       style: `--c:${a.colour}`,
       "stroke-width": 1 + Math.log2(e.count),
       "vector-effect": "non-scaling-stroke", // same thickness at every zoom
-      opacity: (0.3 + 0.7 * (e.step / graph.steps)).toFixed(2), // recent = solid, old = faded
+      // recent = solid, old = faded; lines between two kernels fainter, so the kernels stand out
+      opacity: ((0.3 + 0.7 * (e.step / graph.steps)) * (inner ? 1 : 0.45)).toFixed(2),
       "marker-end": `url(#${latest ? "head-green" : "head"})`,
     });
     layer.append(e.el);
