@@ -20,6 +20,7 @@ let pinned = false; // tapped or clicked: the card stays until the background is
 let view = { x: 0, y: 0, k: 1 }; // pan and zoom
 let autoFit = true; // keep the whole graph in view until the visitor pans or zooms
 let alpha = 0, alphaTarget = 0, running = false; // the simulation's "heat": forces fade as it cools
+const NUDGE = 0.08; // heat for a drag or a new album: below 0.3, so circles keep colliding instead of cramming into each other
 let morph = null; // a year change in progress: { t0, from, to } positions per album
 const MORPH = 900; // ms for the albums to glide from one year's layout to the next
 let W = 800, H = 500, layer = null;
@@ -237,9 +238,9 @@ function tick() {
       const a = nodes[i], b = nodes[j];
       const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, gap = a.r + b.r + (a.kernel === b.kernel ? 12 : MOAT);
       if (d >= gap) continue;
-      const push = (gap - d) / 2 / d;
-      if (!a.fixed) { a.x -= dx * push; a.y -= dy * push; }
-      if (!b.fixed) { b.x += dx * push; b.y += dy * push; }
+      const push = (gap - d) / d, sa = a.fixed ? 0 : b.fixed ? 1 : 0.5; // a dragged circle doesn't give way: the other takes all of it
+      a.x -= dx * push * sa; a.y -= dy * push * sa;
+      b.x += dx * push * (1 - sa); b.y += dy * push * (1 - sa);
     }
   }
   alpha += (alphaTarget - alpha) * 0.03; // cool down
@@ -264,7 +265,7 @@ function step() {
       const a = morph.from.get(n.key), b = morph.to.get(n.key);
       n.x = a.x + (b.x - a.x) * e; n.y = a.y + (b.y - a.y) * e;
     }
-    if (p === 1) { morph = null; alpha = 0.1; } // then the same short settle as a first layout
+    if (p === 1) morph = null;
   } else tick();
   for (const n of graph.nodes) pos.set(n.key, { x: n.x, y: n.y });
   if (autoFit) fit();
@@ -276,8 +277,11 @@ function step() {
 // ---------- drawing ----------
 
 function update() {
+  const shape = data.tracks.map((t) => `${t.key}|${t.played_at}|${t.now_playing}`).join("\n");
+  if (graph?.shape === shape) return patch(); // same plays: only covers or links arrived
   const before = graph;
   graph = model(data.tracks);
+  graph.shape = shape;
   const fresh = graph.nodes.filter((n) => !pos.has(n.key)).length;
   const gone = before ? before.nodes.filter((n) => !graph.byKey.has(n.key)) : [];
   size();
@@ -286,9 +290,11 @@ function update() {
   const big = before && fresh + gone.length > graph.nodes.length / 4; // another year, not just a new album
   const from = new Map(graph.nodes.map((n) => [n.key, { x: n.x, y: n.y }]));
   if (!before || big) {
-    // Work out most of the layout before drawing it: the graph appears nearly in place, then settles
+    // Work out the whole layout before drawing it (about 0.1 s): the graph appears in place and still,
+    // instead of settling on screen while the covers load
     alpha = 1;
-    while (alpha > 0.1) tick();
+    while (alpha > 0.01) tick();
+    alpha = 0;
   }
   if (big) { // then glide there: albums that stayed move from where they were, new ones grow in at their place
     const to = new Map(graph.nodes.map((n) => [n.key, { x: n.x, y: n.y }]));
@@ -303,7 +309,20 @@ function update() {
     setTimeout(() => n.el.remove(), 600);
   }
   // nothing changed: nothing moves; a new album: a small adjustment; another year: the glide above
-  if (big) reheat(0); else if (fresh || gone.length) reheat(before ? 0.3 : 0.1);
+  if (big) reheat(0); else if (before && (fresh || gone.length)) reheat(NUDGE);
+}
+
+// Covers that arrived after the graph was drawn: change those circles' pictures, nothing else moves or reloads
+function patch() {
+  const latest = new Map();
+  for (const t of data.tracks) if (!latest.has(t.key)) latest.set(t.key, t); // newest first
+  graph.nodes.forEach((n, i) => {
+    const t = latest.get(n.key);
+    if (t.cover === n.latest.cover && t.deezer === n.latest.deezer) return;
+    n.latest = t;
+    picture(n, i);
+  });
+  describe(graph.byKey.get(selected));
 }
 
 // The timeline under the graph: one step per year of history, then "Now"
@@ -415,20 +434,10 @@ function build(before) { // before: the previous graph, to tell which albums are
       style: `--c:${n.colour}`,
       tabindex: 0, role: "button", "aria-label": `${name(n)} by ${n.latest.artist}, ${n.plays} plays`, "data-key": n.key,
     });
-    const lens = el("g", { class: "lens" }); // grows on hover
-    const fallback = () => {
-      lens.prepend(el("circle", { r: n.r, fill: n.colour, opacity: 0.5 }));
-      if (n.r >= 10) lens.append(Object.assign(el("text", { class: "initials" }), { textContent: initials(n) })); // no room in a small dot
-    };
-    if (n.latest.cover) {
-      const clip = el("clipPath", { id: `clip${i}` });
-      clip.append(el("circle", { r: n.r }));
-      const img = el("image", { href: n.latest.cover, x: -n.r, y: -n.r, width: 2 * n.r, height: 2 * n.r, "clip-path": `url(#clip${i})`, preserveAspectRatio: "xMidYMid slice" });
-      img.addEventListener("error", () => { img.remove(); fallback(); });
-      lens.append(clip, img);
-    } else fallback();
-    lens.append(el("circle", { r: n.r, class: "ring", "vector-effect": "non-scaling-stroke" })); // 1 px at every zoom
-    g.append(lens);
+    n.lens = el("g", { class: "lens" }); // grows on hover
+    n.lens.append(el("circle", { r: n.r, class: "ring", "vector-effect": "non-scaling-stroke" })); // 1 px at every zoom
+    picture(n, i);
+    g.append(n.lens);
     g.addEventListener("pointerenter", (ev) => ev.pointerType === "mouse" && !drag && !pinned && select(n.key));
     g.addEventListener("pointerleave", (ev) => ev.pointerType === "mouse" && !drag && !pinned && select(null));
     g.addEventListener("focus", () => select(n.key));
@@ -440,6 +449,23 @@ function build(before) { // before: the previous graph, to tell which albums are
   if (autoFit) fit(); else applyView();
   renderStats();
   select(selected && graph.byKey.has(selected) ? selected : null);
+}
+
+// A circle's picture, under its ring: the cover clipped round, or the kernel colour with initials while there is none
+function picture(n, i) {
+  const ring = n.lens.querySelector(".ring");
+  for (const old of [...n.lens.children]) if (old !== ring) old.remove();
+  const fallback = () => {
+    n.lens.insertBefore(el("circle", { r: n.r, fill: n.colour, opacity: 0.5 }), ring);
+    if (n.r >= 10) n.lens.insertBefore(Object.assign(el("text", { class: "initials" }), { textContent: initials(n) }), ring); // no room in a small dot
+  };
+  if (!n.latest.cover) return fallback();
+  const clip = el("clipPath", { id: `clip${i}` });
+  clip.append(el("circle", { r: n.r }));
+  const img = el("image", { href: n.latest.cover, x: -n.r, y: -n.r, width: 2 * n.r, height: 2 * n.r, "clip-path": `url(#clip${i})`, preserveAspectRatio: "xMidYMid slice" });
+  img.addEventListener("error", () => { img.remove(); clip.remove(); fallback(); });
+  n.lens.insertBefore(clip, ring);
+  n.lens.insertBefore(img, ring);
 }
 
 // Where a circle is drawn: its place in the layout, plus the offsets of the motion (see animate)
@@ -522,9 +548,8 @@ svg.addEventListener("pointerdown", (ev) => {
     return;
   }
   const hit = ev.target.closest(".node");
-  drag = { node: hit && graph.byKey.get(hit.dataset.key), last: point(ev), moved: 0 };
-  if (drag.node) { drag.node.fixed = true; alphaTarget = 0.3; reheat(0.3); }
-  else svg.classList.add("panning");
+  drag = { node: hit && graph.byKey.get(hit.dataset.key), start: point(ev), last: point(ev), moved: 0 };
+  if (!drag.node) svg.classList.add("panning"); // on a circle, nothing moves until the pointer does: a click only selects
 });
 
 svg.addEventListener("pointermove", (ev) => {
@@ -538,10 +563,11 @@ svg.addEventListener("pointermove", (ev) => {
     }
     return;
   }
-  drag.moved += Math.hypot(p.x - drag.last.x, p.y - drag.last.y);
+  drag.moved = Math.max(drag.moved, Math.hypot(p.x - drag.start.x, p.y - drag.start.y));
   if (drag.node) {
+    if (drag.moved < 5) return; // still a tap
+    if (!drag.node.fixed) { drag.node.fixed = true; alphaTarget = NUDGE; reheat(NUDGE); autoFit = false; } // a real drag starts
     Object.assign(drag.node, toWorld(p));
-    if (drag.moved > 5) autoFit = false; // don't rescale under the finger
     render();
   } else {
     view.x += p.x - drag.last.x;
@@ -686,16 +712,27 @@ function animate(t) {
         moved.add(n);
       }
     }
+    const lean = new Map(); // album -> how far it wants to lean this frame
+    const want = (n, x, y) => { const l = lean.get(n) || { x: 0, y: 0 }; lean.set(n, { x: l.x + x, y: l.y + y }); };
     if (!still.matches) graph.flow.forEach((key, i) => {
       if (!i) return;
       const a = graph.byKey.get(graph.flow[i - 1]), b = graph.byKey.get(key);
       const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
       // each leans up to 30% of the gap (16 at most), so the two never touch
-      const lean = Math.min(16, Math.max(0, d - a.r - b.r) * 0.3) * (1 - Math.cos(2 * Math.PI * (t / FLOW - i * 0.12))) / 2;
-      a.ox += (dx / d) * lean; a.oy += (dy / d) * lean;
-      b.ox -= (dx / d) * lean; b.oy -= (dy / d) * lean;
-      moved.add(a).add(b);
+      const l = Math.min(16, Math.max(0, d - a.r - b.r) * 0.3) * (1 - Math.cos(2 * Math.PI * (t / FLOW - i * 0.12))) / 2;
+      want(a, (dx / d) * l, (dy / d) * l);
+      want(b, (-dx / d) * l, (-dy / d) * l);
     });
+    // a leaning album never runs into another circle: it leans only as far as there is room (halving until it fits)
+    for (const [n, l] of lean) {
+      for (let s = 1; s > 0.1; s /= 2) {
+        const x = px(n) + l.x * s, y = py(n) + l.y * s;
+        if (graph.nodes.some((m) => m !== n && Math.hypot(px(m) - x, py(m) - y) < pr(m) + pr(n) + 2)) continue;
+        n.ox += l.x * s; n.oy += l.y * s;
+        break;
+      }
+      moved.add(n);
+    }
     if (!running) render(new Set([...before, ...moved])); // also redraws what stopped moving; a running layout draws everything itself
   }
   requestAnimationFrame(animate);
