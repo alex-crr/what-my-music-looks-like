@@ -64,8 +64,17 @@ main { padding: 0 20px; }
 /* playing now: the album beats like a heart and pushes its neighbours aside (animate() in app.js) */
 .node.now image { opacity: 1; }
 
+/* changing year: new albums grow in, the ones that left shrink and fade out */
+.node.enter .lens { animation: grow 0.6s ease-out backwards; }
+.node.leave { pointer-events: none; animation: gone 0.5s ease-in forwards; }
+.node.leave .lens { animation: shrink 0.5s ease-in forwards; }
+@keyframes grow { from { transform: scale(0); } }
+@keyframes shrink { to { transform: scale(0.3); } }
+@keyframes gone { to { opacity: 0; } }
+
 @media (prefers-reduced-motion: reduce) {
-  #card.live img, #card.live .swatch { animation: none; }
+  #card.live img, #card.live .swatch, .node.enter .lens, .node.leave, .node.leave .lens { animation: none; }
+  .node.leave { display: none; }
 }
 
 /* footer card: the album hovered or tapped, otherwise what is playing now */
@@ -83,7 +92,7 @@ main { padding: 0 20px; }
 /* ---------- footer ---------- */
 footer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 14px 20px 24px; color: var(--muted); font-size: 0.8rem; }
 /* timeline: a year of the history, or now */
-.timeline { max-width: 560px; margin: 10px 0 0; }
+.timeline { margin: 10px 0 0; } /* the full width of the graph */
 .timeline input { width: 100%; margin: 0; accent-color: #c9c9d1; }
 .timeline .ticks { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .timeline .ticks .on { color: #fff; font-weight: 600; }

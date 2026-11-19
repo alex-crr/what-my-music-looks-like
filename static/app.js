@@ -7,6 +7,7 @@ const COLOURS = ["#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#60a5fa", "#f87171
 const LONE = "#8a8a93"; // albums in no kernel
 const FOCAL = 10; // the most played albums: full colour
 const REPEL = 120; // how hard circles push each other away
+const ANCHOR = 0.1; // how firmly albums that stay are held in place while the layout changes year
 const MOAT = 60; // empty space kept around each kernel, so kernels stand as separate islands
 const PULL = 150; // strength of the pull to the middle
 const FILL = 0.15; // share of the frame the circles should cover
@@ -19,11 +20,14 @@ let pinned = false; // tapped or clicked: the card stays until the background is
 let view = { x: 0, y: 0, k: 1 }; // pan and zoom
 let autoFit = true; // keep the whole graph in view until the visitor pans or zooms
 let alpha = 0, alphaTarget = 0, running = false; // the simulation's "heat": forces fade as it cools
+let morph = null; // a year change in progress: { t0, from, to } positions per album
+const MORPH = 900; // ms for the albums to glide from one year's layout to the next
 let W = 800, H = 500, layer = null;
 let soon = null; // timer to ask the server again while data or covers are on their way
 let quick = 0; // quick re-asks in a row: capped, so a Deezer that keeps refusing can't keep the page busy
 let seen = ""; // what the last answer looked like: an identical answer doesn't redraw anything
 let year = null; // the timeline: null = now (last 30 days, live), or a year of the Deezer history
+const hue = new Map(); // album -> its kernel's colour last time, so colours follow the albums from one year to the next
 const slider = document.getElementById("year");
 
 // ---------- data ----------
@@ -117,7 +121,15 @@ function findKernels(nodes, edges) {
   for (const n of nodes) groups.set(group.get(n.key), [...(groups.get(group.get(n.key)) || []), n]);
   const kernels = [...groups.values()].filter((g) => g.length >= 2).sort((a, b) => total(b) - total(a));
   nodes.forEach((n) => Object.assign(n, { kernel: -1, colour: LONE }));
-  kernels.forEach((members, i) => members.forEach((n) => Object.assign(n, { kernel: i, colour: COLOURS[i % COLOURS.length] })));
+  // Each kernel keeps the colour most of its albums (weighted by plays) had before; a new one takes a free colour
+  const taken = new Set();
+  kernels.forEach((members, i) => {
+    const votes = new Map();
+    for (const n of members) if (hue.has(n.key) && !taken.has(hue.get(n.key))) votes.set(hue.get(n.key), (votes.get(hue.get(n.key)) || 0) + n.plays);
+    const colour = [...votes].sort((a, b) => b[1] - a[1])[0]?.[0] || COLOURS.find((c) => !taken.has(c)) || COLOURS[i % COLOURS.length];
+    taken.add(colour);
+    members.forEach((n) => { Object.assign(n, { kernel: i, colour }); hue.set(n.key, colour); });
+  });
   return kernels;
 }
 
@@ -206,6 +218,8 @@ function tick() {
       n.vy += (cy - n.y) * 0.07 * alpha;
     }
   }
+  // after a year change, albums that stayed are held near where they were, so the others arrange around them
+  for (const n of nodes) if (n.anchor) { n.vx += (n.anchor.x - n.x) * ANCHOR * alpha; n.vy += (n.anchor.y - n.y) * ANCHOR * alpha; }
   // Pull to the middle, measured against a box shaped like the frame: the layout settles into
   // the frame's shape (wide on a laptop, tall on a phone) and fills it, so the circles show bigger.
   const [boxW, boxH] = box();
@@ -244,30 +258,52 @@ function reheat(a) {
 }
 
 function step() {
-  tick();
+  if (morph) { // a year change: glide from where each album was to its place in the new layout
+    const p = still.matches ? 1 : Math.min(1, (performance.now() - morph.t0) / MORPH), e = p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2;
+    for (const n of graph.nodes) {
+      const a = morph.from.get(n.key), b = morph.to.get(n.key);
+      n.x = a.x + (b.x - a.x) * e; n.y = a.y + (b.y - a.y) * e;
+    }
+    if (p === 1) { morph = null; alpha = 0.1; } // then the same short settle as a first layout
+  } else tick();
   for (const n of graph.nodes) pos.set(n.key, { x: n.x, y: n.y });
   if (autoFit) fit();
   render();
-  if (alpha > 0.01 || alphaTarget > 0) requestAnimationFrame(step);
+  if (morph || alpha > 0.01 || alphaTarget > 0) requestAnimationFrame(step);
   else running = false;
 }
 
 // ---------- drawing ----------
 
 function update() {
-  const first = !graph;
+  const before = graph;
   graph = model(data.tracks);
   const fresh = graph.nodes.filter((n) => !pos.has(n.key)).length;
-  const jump = first || fresh > graph.nodes.length / 2; // first layout, or another year: mostly new albums
+  const gone = before ? before.nodes.filter((n) => !graph.byKey.has(n.key)) : [];
   size();
-  place(); // albums already on screen start where they were, so a year change shows what stayed
-  if (jump) {
+  place(); // every album starts where it was last seen, so a year change shows what stayed
+  if (before) for (const n of graph.nodes) if (before.byKey.has(n.key)) n.anchor = { x: n.x, y: n.y };
+  const big = before && fresh + gone.length > graph.nodes.length / 4; // another year, not just a new album
+  const from = new Map(graph.nodes.map((n) => [n.key, { x: n.x, y: n.y }]));
+  if (!before || big) {
     // Work out most of the layout before drawing it: the graph appears nearly in place, then settles
     alpha = 1;
     while (alpha > 0.1) tick();
   }
-  build();
-  if (fresh) reheat(jump ? 0.1 : 0.3); // a new album: let the layout adjust; otherwise nothing moves
+  if (big) { // then glide there: albums that stayed move from where they were, new ones grow in at their place
+    const to = new Map(graph.nodes.map((n) => [n.key, { x: n.x, y: n.y }]));
+    for (const n of graph.nodes) if (before.byKey.has(n.key)) Object.assign(n, from.get(n.key)); else from.set(n.key, to.get(n.key));
+    morph = { t0: performance.now(), from, to };
+    alpha = 0;
+  }
+  build(before);
+  for (const n of gone) { // albums that left fade out where they were
+    n.el.classList.add("leave");
+    layer.insertBefore(n.el, graph.nodes[0].el);
+    setTimeout(() => n.el.remove(), 600);
+  }
+  // nothing changed: nothing moves; a new album: a small adjustment; another year: the glide above
+  if (big) reheat(0); else if (fresh || gone.length) reheat(before ? 0.3 : 0.1);
 }
 
 // The timeline under the graph: one step per year of history, then "Now"
@@ -293,12 +329,17 @@ function timeline(years) {
 function place() {
   const [boxW, boxH] = box();
   const count = graph.kernels.length;
+  // where each kernel's already-known albums are: a new album joins its kernel there
+  const home = graph.kernels.map((m) => {
+    const known = m.filter((n) => pos.has(n.key)).map((n) => pos.get(n.key));
+    return known.length ? { x: mean(known, "x"), y: mean(known, "y") } : null;
+  });
   graph.nodes.forEach((n, i) => {
     const p = pos.get(n.key);
     const from = !p && graph.edges.find((e) => e.to === n.key && pos.has(e.from) && graph.byKey.get(e.from).kernel === n.kernel);
     const turn = (2 * Math.PI * n.kernel) / Math.max(1, count);
     const anchor = n.kernel >= 0 && count > 1 ? { x: Math.cos(turn) * boxW * 0.3, y: Math.sin(turn) * boxH * 0.3 } : { x: 0, y: 0 };
-    const base = p || (from && pos.get(from.from)) || anchor;
+    const base = p || (from && pos.get(from.from)) || (n.kernel >= 0 && home[n.kernel]) || anchor;
     const a = i * 2.4, d = p ? 0 : from ? 30 : 8 * Math.sqrt(i % 40);
     Object.assign(n, { x: base.x + Math.cos(a) * d, y: base.y + Math.sin(a) * d, vx: 0, vy: 0 });
   });
@@ -309,7 +350,7 @@ function size() {
   H = Math.round(W < 600 ? W * 1.15 : Math.max(420, Math.min(W * 0.6, innerHeight - 280)));
 }
 
-function build() {
+function build(before) { // before: the previous graph, to tell which albums are new
   size();
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   layer = el("g", {});
@@ -370,7 +411,7 @@ function build() {
 
   graph.nodes.forEach((n, i) => {
     const g = el("g", {
-      class: `node${n.now ? " now" : ""}${n.focal ? " focal" : ""}`,
+      class: `node${n.now ? " now" : ""}${n.focal ? " focal" : ""}${before && !before.byKey.has(n.key) ? " enter" : ""}`,
       style: `--c:${n.colour}`,
       tabindex: 0, role: "button", "aria-label": `${name(n)} by ${n.latest.artist}, ${n.plays} plays`, "data-key": n.key,
     });
